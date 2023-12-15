@@ -60,7 +60,7 @@ def eps_conversion_pact_gelu(m : nn.Module, eps_in : torch.Tensor):
 def eps_conversion_pact_matmul(m : nn.Module, *eps_ins):
     return eps_ins[0] * eps_ins[1].type_as(eps_ins[0])
 
-def eps_conversion_matmul(*eps_ins):
+def eps_conversion_matmul(m : nn.Module, *eps_ins):
     return eps_ins[0] * eps_ins[1].type_as(eps_ins[0])
 
 def eps_conversion_pact_softmax(m : nn.Module, eps_in : torch.Tensor):
@@ -69,7 +69,7 @@ def eps_conversion_pact_softmax(m : nn.Module, eps_in : torch.Tensor):
 def eps_conversion_pact_layernorm(m : nn.Module, eps_in : torch.Tensor):
     return m.get_eps_out(eps_in).type_as(eps_in)
 
-def eps_conversion_identity(*eps_ins):
+def eps_conversion_identity(m : nn.Module, *eps_ins):
     return eps_ins[0]
 
 def eps_conversion_truediv(m : nn.Module, *eps_ins, **kwargs):
@@ -206,7 +206,7 @@ _N_LEVELS_OUT_PROP = {
     PACTSoftmax : n_levels_out_pact_acts,
     PACTUnsignedAct : n_levels_out_pact_acts,
     PACTWrapModule : n_levels_out_pact_acts,
-    
+
     PACTIntegerGELU : n_levels_out_pact_acts,
     PACTIntegerITAMax: n_levels_out_pact_acts,
     PACTIntegerITAPartialMax: n_levels_out_pact_acts,
@@ -238,7 +238,7 @@ _SIGNED_OUT_PROP = {
     '_CALL_METHOD_reshape' : signed_out_first_in,
     '_CALL_METHOD_transpose' : signed_out_first_in,
     '_CALL_METHOD_view' : signed_out_first_in,
-    
+
     f'_CALL_FUNCTION_{repr(getattr)}' : signed_out_first_in,
     f'_CALL_FUNCTION_{repr(operator.add)}' : signed_out_or_in_signed,
     f'_CALL_FUNCTION_{repr(operator.getitem)}' : signed_out_first_in,
@@ -365,8 +365,12 @@ class AnnotateEpsPass(FxPass):
                     m = None
 
                 if self.prop_eps:
-                    arg_eps_ins = [i.meta['quant'].eps_out for i in node.args if isinstance(i, fx.Node)]
-                    other_args = [i for i in node.args if not isinstance(i, fx.Node)]
+                    if isinstance(node.args[0], fx.immutable_collections.immutable_list):
+                        arg_eps_ins = [i.meta['quant'].eps_out for i in node.args[0] if isinstance(i, fx.Node)]
+                        other_args = [i for i in node.args[0] if not isinstance(i, fx.Node)]
+                    else:
+                        arg_eps_ins = [i.meta['quant'].eps_out for i in node.args if isinstance(i, fx.Node)]
+                        other_args = [i for i in node.args if not isinstance(i, fx.Node)]
 
                     kwarg_eps_ins = {k : v.meta['quant'].eps_out for k, v in node.kwargs.items() if isinstance(v, fx.Node)}
                     other_kwargs = {k : v for k, v in node.kwargs.items() if not isinstance(v, fx.Node)}
@@ -377,12 +381,12 @@ class AnnotateEpsPass(FxPass):
                     if node.op == 'call_module':
                         conversion_args = [m] + arg_eps_ins + other_args
                     else:
-                        conversion_args = arg_eps_ins
+                        conversion_args = [None] + arg_eps_ins
 
                     try:
                         eps_out = _EPS_CONVERSIONS[k](*conversion_args, **conversion_kwargs)
                     except KeyError:
-                        if (self.verbose): 
+                        if (self.verbose):
                             print(f"[AnnotateEpsPass] Key {k} not found in _EPS_CONVERSIONS!")
                         eps_diffs = [torch.abs(e1 - e2) for e1, e2 in zip(all_eps[:-1], all_eps[1:])]
                         if not all(d < 1e-8 for d in eps_diffs):
@@ -395,11 +399,14 @@ class AnnotateEpsPass(FxPass):
                     eps_out = None
 
                 if self.prop_n_levels:
-                    node_in_levels = [i.meta['quant'].n_levels_out for i in node.args if isinstance(i, fx.Node)]
+                    if isinstance(node.args[0], fx.immutable_collections.immutable_list):
+                        node_in_levels = [i.meta['quant'].n_levels_out for i in node.args[0] if isinstance(i, fx.Node)]
+                    else:
+                        node_in_levels = [i.meta['quant'].n_levels_out for i in node.args if isinstance(i, fx.Node)]
                     try:
                         node_out_levels = _N_LEVELS_OUT_PROP[k](m, node_in_levels, self.accumulator_levels)
                     except KeyError:
-                        if (self.verbose): 
+                        if (self.verbose):
                             print(f"[AnnotateEpsPass] Key {k} not found in _N_LEVELS_OUT_PROP!")
                         in_levels_diffs = [abs(l1 - l2) for l1, l2 in zip(node_in_levels[:-1], node_in_levels[1:])]
                         if not all(d < 1e-8 for d in in_levels_diffs):
@@ -412,12 +419,14 @@ class AnnotateEpsPass(FxPass):
                     node_out_levels = None
 
                 if self.prop_sign:
-
-                    node_in_signed = [i.meta['quant'].signed_out for i in node.args if isinstance(i, fx.Node)]
+                    if isinstance(node.args[0], fx.immutable_collections.immutable_list):
+                        node_in_signed = [i.meta['quant'].signed_out for i in node.args[0] if isinstance(i, fx.Node)]
+                    else:
+                        node_in_signed = [i.meta['quant'].signed_out for i in node.args if isinstance(i, fx.Node)]
                     try:
                         node_out_signed = _SIGNED_OUT_PROP[k](m, node_in_signed)
                     except KeyError:
-                        if (self.verbose): 
+                        if (self.verbose):
                             print(f"[AnnotateEpsPass] Key {k} not found in _SIGNED_OUT_PROP!")
                         in_singed_diffs = [abs(s1 - s2) for s1, s2 in zip(node_in_signed[:-1], node_in_signed[1:])]
                         if not all(d < 1e-8 for d in in_singed_diffs):
