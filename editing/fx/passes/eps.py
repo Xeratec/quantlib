@@ -84,6 +84,9 @@ def eps_conversion_pact_constwrap(m : nn.Module, *eps_ins, **kwargs):
 def eps_conversion_pact_integeradd(m : nn.Module, *eps_ins, **kwargs):
     return m.act_out.get_eps().type_as(eps_ins[0])
 
+def eps_conversion_pact_integerconcat(m : nn.Module, *eps_ins, **kwargs):
+    return m.acts[0].get_eps().type_as(eps_ins[0])
+
 def eps_conversion_embedding(m : nn.Module, eps_in : torch.Tensor):
     return m.adder.act_out.get_eps().type_as(eps_in)
 
@@ -143,6 +146,7 @@ _EPS_CONVERSIONS = {
     PACTLinear : eps_conversion_pact_linears,
 
     PACTIntegerAdd : eps_conversion_pact_integeradd,
+    PACTIntegerConcat : eps_conversion_pact_integerconcat,
     PACTIntegerGELU : eps_conversion_pact_gelu,
     PACTIntegerITAMax: eps_conversion_pact_softmax,
     PACTIntegerITAPartialMax: eps_conversion_pact_softmax,
