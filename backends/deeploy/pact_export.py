@@ -167,6 +167,9 @@ def export_net(net: nn.Module,
             export_gelu_node = True,
             export_div_node = True)
         net_integerized = int_pass(net_traced)
+        print("[QuantLab] === Integer PyTorch Network ===")
+        print(net_integerized.modules)
+        net_integerized.graph.print_tabular()
     else:
         net_integerized = net
 
