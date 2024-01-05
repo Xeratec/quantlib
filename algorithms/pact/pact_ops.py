@@ -1950,7 +1950,7 @@ class PACTIntegerITAMax(torch.nn.Module):
             return self.MySoftmax.forward(None, x, self.n_levels.type_as(x))
 
 class PACTITAPartialMax(_PACTEps):
-    def __init__(self, processing_uints: int = 16, ita_sequence_length: int = 64, n_levels: int = 256, **kwargs):
+    def __init__(self, processing_uints: int = 16, n_levels: int = 256, **kwargs):
         super().__init__(True)
 
         kwargs_stats = {
@@ -1965,7 +1965,6 @@ class PACTITAPartialMax(_PACTEps):
         self.act = PACTAsymmetricAct(**kwargs_stats)
         self.n_levels = n_levels
         self.width = processing_uints
-        self.groups = ita_sequence_length//processing_uints
 
         self.B = math.log2( self.n_levels )
         self.eps_max = torch.Tensor((self.B / (2**self.B),))
@@ -1986,10 +1985,8 @@ class PACTITAPartialMax(_PACTEps):
 
         _, H, S, _ = x.size()
 
-        # WIESEP: Even though it is technically possible to support other sequence lengths, this has not yet been implemented.
-        # To support smaller sequence lengths at the moment, the inputs must be padded with -128 to a 64x64 tensor, because
-        # the internal sequence length of ITA is fixed to 64.
-        # assert S == 64, f"[PACTITAPartialMax] Currently only a sequence length of 64 is supported with ITA!"
+        groups = S // self.width
+        assert S % self.width == 0, f"[PACTITAPartialMax] The sequence length must be a multiple of the group width ({group_width}!"
 
         # Gather statistics about inputs
         _ = self.act(x)
@@ -2021,7 +2018,7 @@ class PACTITAPartialMax(_PACTEps):
         global_max = torch.full_like(x, -torch.inf)[...,0]
 
         ## STAGE 1: Compute the denominator of the softmax
-        for i in range(self.groups):
+        for i in range(groups):
             # Find the maximum for each row in the current column block (consisting of 16 columns)
             current_max = torch.max(x[...,0 + i * self.width:self.width + i * self.width], dim = -1)[0]
 
@@ -2069,12 +2066,15 @@ class PACTITAPartialMax(_PACTEps):
 class PACTIntegerITAPartialMax(torch.nn.Module):
     class MySoftmax(torch.autograd.Function):
         @staticmethod
-        def forward(ctx, x: torch.Tensor, n_levels: torch.Tensor, groups: int, group_width: int):
+        def forward(ctx, x: torch.Tensor, n_levels: torch.Tensor, group_width: int):
 
             B = torch.log2(n_levels).type_as(x)
             eps_max = B / (2**B)
 
             _, H, S, _ = x.size()
+
+            groups = S // group_width
+            assert S % group_width == 0, f"[PACTIntegerITAPartialMax] The sequence length must be a multiple of the group width ({group_width}!"
 
             # Initialize denominator
             exp_partial_sum = torch.zeros_like(x)[...,0].type(torch.int32)
@@ -2129,19 +2129,18 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
 
         @staticmethod
         @parse_args('v', 't', 'i','i')
-        def symbolic(g, x, n_levels, groups, group_width):
+        def symbolic(g, x, n_levels, group_width):
 
             n_levels_ = g.op("Constant", value_t=n_levels)
 
-            return g.op("PACTOps::ITAPartialMax", x, n_levels_t=n_levels, groups_i=groups, group_width_i=group_width)
+            return g.op("PACTOps::ITAPartialMax", x, n_levels_t=n_levels, group_width_i=group_width)
 
-    def __init__(self, max_value, n_levels: int = 256, processing_uints: int = 16, ita_sequence_length: int = 64, eps_in: float = 1./255, D=2**12, export_node=False, **kwargs):
+    def __init__(self, max_value, n_levels: int = 256, processing_uints: int = 16, eps_in: float = 1./255, D=2**12, export_node=False, **kwargs):
         super().__init__()
 
         self.max = max_value
         self.n_levels = torch.Tensor((n_levels,))
         self.group_width = processing_uints
-        self.groups = ita_sequence_length//processing_uints
         self.eps_in = eps_in
         self.export_node = export_node
 
@@ -2159,9 +2158,9 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
         # Clip and rescale values to enforce eps_max = B / 2**B
         x = self.rq(x)
         if self.export_node:
-            return self.MySoftmax.apply(x, self.n_levels.type_as(x), int(self.groups), int(self.group_width))
+            return self.MySoftmax.apply(x, self.n_levels.type_as(x), int(self.group_width))
         else:
-            return self.MySoftmax.forward(None, x, self.n_levels.type_as(x), int(self.groups), int(self.group_width))
+            return self.MySoftmax.forward(None, x, self.n_levels.type_as(x), int(self.group_width))
 
 class PACTGELU(_PACTEps):
 
