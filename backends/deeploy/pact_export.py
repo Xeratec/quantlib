@@ -165,7 +165,8 @@ def export_net(net: nn.Module,
             export_layernorm_node = True,
             export_softmax_node = True,
             export_gelu_node = True,
-            export_div_node = True)
+            export_div_node = True,
+            export_unity_rqs=True)
         net_integerized = int_pass(net_traced)
         print("[QuantLab] === Integer PyTorch Network ===")
         print(net_integerized.modules)
