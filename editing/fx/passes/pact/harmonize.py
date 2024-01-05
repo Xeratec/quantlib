@@ -379,7 +379,7 @@ class InsertActivationsAfterLinearsPass(SequentialPass):
 
         idx = 0
         for node in node_list:
-            new_module = self.inserted_module(node)
+            new_module = self.inserted_module(node, **self.kwargs)
             if new_module is not None:
                 passes.append(InsertModuleAfterNodePass(node, new_module, f"{self.name.upper()}_{idx}"))
                 idx += 1
