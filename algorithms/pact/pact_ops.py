@@ -2050,7 +2050,9 @@ class PACTITAPartialMax(_PACTEps):
 
         ## STAGE 2: Calculate the softmax activation
         # Invert the partial sum
-        exp_partial_sum_inverse = RQ(self.n_levels * (self.n_levels-1) / exp_partial_sum, 1, round=False)
+        # WIESEP: Scale Softmax to 127 instead of
+        # The Softmax values are maximum 127 as sumdot modules can only do signed-signed operations for now. This is a temporary fix until sumdot is fixed.
+        exp_partial_sum_inverse = RQ(self.n_levels * (self.n_levels/2-1) / exp_partial_sum, 1, round=False)
 
         # Find the difference between the maximum and x
         diff = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) - x
@@ -2115,7 +2117,9 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
 
             ## STAGE 2: Calculate the softmax activation
             # Invert the partial sum
-            exp_partial_sum_inverse = torch.floor(n_levels * (n_levels-1) / exp_partial_sum).type(torch.int32)
+            # WIESEP: Scale Softmax to 127 instead of
+            # The Softmax values are maximum 127 as sumdot modules can only do signed-signed operations for now. This is a temporary fix until sumdot is fixed.
+            exp_partial_sum_inverse = torch.floor(n_levels * (n_levels/2-1) / exp_partial_sum).type(torch.int32)
 
             # Find the difference between the maximum and x
             diff = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) - x.type(torch.int32)
