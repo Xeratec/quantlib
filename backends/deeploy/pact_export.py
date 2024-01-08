@@ -308,9 +308,9 @@ def export_net(net: nn.Module,
 
         np.savez(out_path.joinpath("activations.npz"), **acts_np)
 
-        out_path.joinpath("activations/").mkdir(parents=True, exist_ok=True)
+        # out_path.joinpath("activations/").mkdir(parents=True, exist_ok=True)
 
-        save_beautiful_text(input_np, "input_0", out_path.joinpath("activations/input.txt"))
-        save_beautiful_text(output_np, "output_0", out_path.joinpath("activations/output.txt"))
-        for jdx, lname in enumerate(acts_np):
-            save_beautiful_text(acts_np[lname], lname, out_path.joinpath(f"activations/act{jdx:02d}_{lname}.txt"))
+        # save_beautiful_text(input_np, "input_0", out_path.joinpath("activations/input.txt"))
+        # save_beautiful_text(output_np, "output_0", out_path.joinpath("activations/output.txt"))
+        # for jdx, lname in enumerate(acts_np):
+        #     save_beautiful_text(acts_np[lname], lname, out_path.joinpath(f"activations/act{jdx:02d}_{lname}.txt"))
