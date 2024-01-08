@@ -164,7 +164,8 @@ class IntegerizeSoftmaxPass(SequentialPass):
         passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_softmax_fun, mode='ITA', D=D, export_node=export_softmax_node), f'_INTEGER_SOFTMAX_PASS'))
 
         pattern = nn.Sequential(PACTITAPartialMax())
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_softmax_fun, mode='ITA-Partial', D=D, export_node=export_softmax_node), f'_INTEGER_SOFTMAX_PASS'))
+        # WIESEP: D should be small enough to cause mult of the RQS node to be in range of int8
+        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_softmax_fun, mode='ITA-Partial', D=2**10, export_node=export_softmax_node), f'_INTEGER_SOFTMAX_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_SOFTMAX_PASS')
 
 class IntegerizeGELUPass(SequentialPass):
