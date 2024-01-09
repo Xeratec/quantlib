@@ -2082,7 +2082,7 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
             exp_partial_sum = torch.zeros_like(x)[...,0].type(torch.int32)
 
             # Initialize maximum with minimal possible value
-            global_max = torch.full_like(x, -127)[...,0].type(torch.int8)
+            global_max = torch.full_like(x, -128)[...,0].type(torch.int8)
 
             ## STAGE 1: Compute the denominator of the softmax
             for i in range(groups):
