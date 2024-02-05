@@ -586,7 +586,7 @@ class PACTIntegerConcat(torch.nn.Module):
         self.clip_lo = self.acts[0].clip_lo
         self.clip_hi = self.acts[0].clip_hi
         self.n_levels = self.acts[0].n_levels
-        self.force_out_eps = force_out_eps
+        # self.force_out_eps = force_out_eps
 
     def reassign_epsilons(self):
         if not self.force_out_eps:

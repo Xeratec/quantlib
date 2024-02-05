@@ -298,7 +298,7 @@ class ConcatTreeReplacementPass(SequentialPass):
         super(ConcatTreeReplacementPass, self).__init__(*passes, name_prefix="_QL_REPLACE_CAT_STACK")
 
     def cat_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
-        return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=False, **(tree.kwargs))
+        return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, learn_clip=True, nb_std=self.nb_std, stack_flag=False, **(tree.kwargs))
 
     def stack_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
         return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=True, **(tree.kwargs))
