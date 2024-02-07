@@ -569,9 +569,9 @@ def apply_wrap_module_fun(node, _pass, _tracer):
     return returnNode, node.args, node.kwargs
 
 class ApplyPassToWrapModule(ModularizePass):
-    def __init__(self, _pass, name=''):
+    def __init__(self, _pass, name='', symbolic_nodes: set = PACT_OPS_INCLUSIVE):
         pattern = [PACTWrapModule(nn.Identity(), n_levels=256)]
-        tracer = LeafTracer(PACT_OPS_INCLUSIVE)
+        tracer = LeafTracer(symbolic_nodes)
         trace = partial(custom_symbolic_trace, tracer=tracer)
 
         super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(apply_wrap_module_fun, _pass=_pass, _tracer=tracer), name=f"APPLY_TO_WRAP_PASS_{name}")

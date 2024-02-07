@@ -147,31 +147,31 @@ def integerize_layernorm_fun(gm : fx.GraphModule, match : Match, affine = True, 
     return new_layernorm
 
 class IntegerizeLayerNormPass(SequentialPass):
-    def __init__(self, affine = True, D=2**12, export_layernorm_node = False, **kwargs):
+    def __init__(self, affine = True, D=2**12, export_layernorm_node = False, symbolic_trace: callable = PACT_symbolic_trace, **kwargs):
         passes = []
         pattern = nn.Sequential(PACTLayerNorm(), PACTAsymmetricAct(256, 'max', True, 'relu'))
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_layernorm_fun, affine=affine, D=D, export_node=export_layernorm_node), f'_INTEGER_LAYERNORM_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, partial(integerize_layernorm_fun, affine=affine, D=D, export_node=export_layernorm_node), f'_INTEGER_LAYERNORM_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_LAYERNORM_PASS')
 
 class IntegerizeSoftmaxPass(SequentialPass):
-    def __init__(self, D=2**12, export_softmax_node = False , **kwargs):
+    def __init__(self, D=2**12, export_softmax_node = False, symbolic_trace: callable = PACT_symbolic_trace, **kwargs):
         passes = []
 
         pattern = nn.Sequential(PACTSoftmax())
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_softmax_fun, mode='I-BERT', export_node=export_softmax_node), f'_INTEGER_SOFTMAX_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, partial(integerize_softmax_fun, mode='I-BERT', export_node=export_softmax_node), f'_INTEGER_SOFTMAX_PASS'))
 
         pattern = nn.Sequential(PACTITAMax())
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_softmax_fun, mode='ITA', D=D, export_node=export_softmax_node), f'_INTEGER_SOFTMAX_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, partial(integerize_softmax_fun, mode='ITA', D=D, export_node=export_softmax_node), f'_INTEGER_SOFTMAX_PASS'))
 
         pattern = nn.Sequential(PACTITAPartialMax())
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_softmax_fun, mode='ITA-Partial', D=D, export_node=export_softmax_node), f'_INTEGER_SOFTMAX_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, partial(integerize_softmax_fun, mode='ITA-Partial', D=D, export_node=export_softmax_node), f'_INTEGER_SOFTMAX_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_SOFTMAX_PASS')
 
 class IntegerizeGELUPass(SequentialPass):
-    def __init__(self, D=2**14, export_gelu_node=False, **kwargs):
+    def __init__(self, D=2**14, export_gelu_node=False, symbolic_trace: callable = PACT_symbolic_trace, **kwargs):
         passes = []
         pattern = nn.Sequential(PACTGELU())
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(integerize_gelu_fun, D=D,export_node=export_gelu_node), f'_INTEGER_GELU_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, partial(integerize_gelu_fun, D=D,export_node=export_gelu_node), f'_INTEGER_GELU_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_GELU_PASS')
 
 def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
@@ -203,12 +203,12 @@ def integerize_pact_conv_fun(gm : fx.GraphModule, match : Match):
 
 
 class IntegerizePACTConvPass(SequentialPass):
-    def __init__(self):
+    def __init__(self, symbolic_trace: callable = PACT_symbolic_trace,):
         passes = []
         for i, c in enumerate((PACTConv1d, PACTConv2d)):
             pattern = nn.Sequential(c(1,1,1))
             name = f"_INTEGERIZE_PACT_CONV{i+1}D_PASS"
-            passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, integerize_pact_conv_fun, name))
+            passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, integerize_pact_conv_fun, name))
         super(IntegerizePACTConvPass, self).__init__(*passes, name_prefix='_INTEGERIZE_PACT_CONVS_PASS')
 
 def integerize_pact_linear_fun(gm : fx.GraphModule, match : Match):
@@ -248,10 +248,10 @@ def integerize_pact_linear_fun(gm : fx.GraphModule, match : Match):
     return new_lin
 
 class IntegerizePACTLinearPass(ReplaceSequentialPatternPass):
-    def __init__(self):
+    def __init__(self, symbolic_trace: callable = PACT_symbolic_trace):
         pattern = nn.Sequential(PACTLinear(1,1))
         name = "_INTEGERIZE_PACT_LIN_PASS"
-        super(IntegerizePACTLinearPass, self).__init__(pattern, PACT_symbolic_trace, integerize_pact_linear_fun, name)
+        super(IntegerizePACTLinearPass, self).__init__(pattern, symbolic_trace, integerize_pact_linear_fun, name)
 
 def swap_maxpool_act_fun(gm : fx.GraphModule, match : Match):
     modules = gm_modules(gm)
@@ -266,13 +266,13 @@ def swap_maxpool_act_fun(gm : fx.GraphModule, match : Match):
     return replacement_sequence
 
 class SwapMaxPoolActPass(SequentialPass):
-    def __init__(self):
+    def __init__(self, symbolic_trace: callable = PACT_symbolic_trace,):
         passes = []
         # Whenever there is a MaxPool-Act sequence, switch their positions to Act-MaxPool
         for act_name, act_type in [("UNSIGNED_ACT", PACTUnsignedAct), ("SIGNED_ACT", PACTAsymmetricAct)]:
             for mp_name, mp_type in [("MP2D", nn.MaxPool2d)]:
                 pattern = nn.Sequential(mp_type(kernel_size=2), act_type(n_levels=256, init_clip='max', learn_clip=False, act_kind='identity'))
-                passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, swap_maxpool_act_fun, f"_SWAP_{mp_name}_{act_name}_PASS"))
+                passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, swap_maxpool_act_fun, f"_SWAP_{mp_name}_{act_name}_PASS"))
         super(SwapMaxPoolActPass, self).__init__(*passes, name_prefix="_SWAP_MAXPOOL_ACT_PASS")
 
 
@@ -319,10 +319,10 @@ def replace_pact_causalconv1d_padconv1d_fun(gm : fx.GraphModule, match : Match):
 
 
 class ReplacePACTCausalConv1DPass(ReplaceSequentialPatternPass):
-    def __init__(self):
+    def __init__(self, symbolic_trace: callable = PACT_symbolic_trace):
         pattern = nn.Sequential(PACTCausalConv1d(1,1,1))
         name = "_REPLACE_PACT_CAUSALCONV1D_PADCONV1D_PASS"
-        super(ReplacePACTCausalConv1DPass, self).__init__(pattern, PACT_symbolic_trace, replace_pact_causalconv1d_padconv1d_fun, name)
+        super(ReplacePACTCausalConv1DPass, self).__init__(pattern, symbolic_trace, replace_pact_causalconv1d_padconv1d_fun, name)
 
 
 def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24, cmsis_requant=False, requant_node=False, skip_identity_rqs=True):
@@ -393,17 +393,17 @@ def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24, cmsis_req
     return requant
 
 class IntegerizeBNActPass(SequentialPass):
-    def __init__(self, D : float = 2**24, cmsis_requant=False, requant_node=False, skip_identity_rqs=True):
+    def __init__(self, D : float = 2**24, cmsis_requant=False, requant_node=False, skip_identity_rqs=True, symbolic_trace: callable = PACT_symbolic_trace,):
         passes = []
         # replace all combinations of BN + PACT activation with RequantShift layers
         for act_name, act_type in [("UNSIGNED_ACT", PACTUnsignedAct), ("SIGNED_ACT", PACTAsymmetricAct)]:
             for bn_name, bn_type in [("BN1D", nn.BatchNorm1d), ("BN2D", nn.BatchNorm2d), ("BN3D", nn.BatchNorm3d)]:
                 pattern = nn.Sequential(bn_type(1), act_type(n_levels=256, init_clip='max', learn_clip=False, act_kind='identity'))
-                passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, bn_act_to_requant_fun, f"_INTEGERIZE_{bn_name}_{act_name}_PASS", D=D, cmsis_requant=cmsis_requant, requant_node=requant_node, skip_identity_rqs=skip_identity_rqs))
+                passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, bn_act_to_requant_fun, f"_INTEGERIZE_{bn_name}_{act_name}_PASS", D=D, cmsis_requant=cmsis_requant, requant_node=requant_node, skip_identity_rqs=skip_identity_rqs))
 
             #also replace "freestanding" activations AFTER replacing the BN+Act stacks
             pattern = nn.Sequential(act_type(n_levels=256, init_clip='max', learn_clip=False, act_kind='identity'))
-            passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, bn_act_to_requant_fun, f"_INTEGERIZE_{act_name}_PASS", D=D, cmsis_requant=cmsis_requant, requant_node=requant_node, skip_identity_rqs=skip_identity_rqs))
+            passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, bn_act_to_requant_fun, f"_INTEGERIZE_{act_name}_PASS", D=D, cmsis_requant=cmsis_requant, requant_node=requant_node, skip_identity_rqs=skip_identity_rqs))
 
         super(IntegerizeBNActPass, self).__init__(*passes, name_prefix="_INTEGERIZE_BN_ACT_PASS")
 
@@ -537,10 +537,10 @@ def embedding_integerize_fun(gm : fx.GraphModule, match : Match, **kwargs):
 
 # This can be made much more general -- Current workaround
 class IntegerizeEmbeddingsPass(SequentialPass):
-    def __init__(self, **kwargs):
+    def __init__(self, symbolic_trace: callable = PACT_symbolic_trace, **kwargs):
         passes = []
         pattern = nn.Sequential(PACTEmbedding(torch.Tensor((1.,)), init_clip='max', learn_clip=False, act_kind='identity'))
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(embedding_integerize_fun, **kwargs), f'_INTEGERIZE_EMBEDDINGS_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, partial(embedding_integerize_fun, **kwargs), f'_INTEGERIZE_EMBEDDINGS_PASS'))
         super().__init__(*passes, name_prefix='_INTEGERIZE_EMBEDDING_PASS')
 
 
@@ -759,14 +759,14 @@ class IntegerizeBNPACTHardActsPass(SequentialPass):
 
         return ha_requant
 
-    def __init__(self, D1, D2):
+    def __init__(self, D1, D2, symbolic_trace: callable = PACT_symbolic_trace):
         passes = []
         for act_name, act_type in [("HARDSIGMOID", PACTHardsigmoid), ("HARDSWISH", PACTHardswish)]:
             for bn_name, bn_type in [("BN1D", nn.BatchNorm1d), ("BN2D", nn.BatchNorm2d), ("BN3D", nn.BatchNorm3d)]:
                 pattern = nn.Sequential(bn_type(1), act_type(1.), _PACTActivation(1, 'max', False, 'relu'))
-                passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, self.bn_hardact_qact_to_requant_fun, f"_INTEGERIZE_{bn_name}_{act_name}_PASS", D1=D1, D2=D2))
+                passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, self.bn_hardact_qact_to_requant_fun, f"_INTEGERIZE_{bn_name}_{act_name}_PASS", D1=D1, D2=D2))
             pattern = nn.Sequential(act_type(1.), _PACTActivation(1, 'max', False, 'relu'))
-            passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, self.bn_hardact_qact_to_requant_fun, f"_INTEGERIZE_{act_name}_PASS", D1=D1, D2=D2))
+            passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, self.bn_hardact_qact_to_requant_fun, f"_INTEGERIZE_{act_name}_PASS", D1=D1, D2=D2))
 
         super(IntegerizeBNPACTHardActsPass, self).__init__(*passes, name_prefix="_INTEGERIZE_BN_HARDACT_QACT_PASS")
 
@@ -778,16 +778,17 @@ class IntegerizePACTNetPass(SequentialPass):
                  convert_input_to_unsigned : bool = False, D1 : float = 2**18, D2 : float = 2**12,
                  ternarize : bool = False, word_align_channels : bool = False,
                  export_layernorm_node = False, export_softmax_node = False,
-                 export_gelu_node = False, export_div_node = False, skip_identity_rqs = True, symbolic_trace = PACT_symbolic_trace, verbose=False):
+                 export_gelu_node = False, export_div_node = False,
+                 skip_identity_rqs = True, symbolic_trace = PACT_symbolic_trace, verbose=False):
 
         passes = []
         # start by retracing the network to dissolve any integer ops
         passes.append(RetracePass(symbolic_trace))
         # if there's a MaxPool followed directly by an PACT Activation, swap their positions
         # (will be needed later for the IntegerizeBNActPass)
-        passes.append(SwapMaxPoolActPass())
+        passes.append(SwapMaxPoolActPass(symbolic_trace=symbolic_trace))
         # replace all CausalConv1d with a ConstantPad+Conv1d module
-        passes.append(ReplacePACTCausalConv1DPass())
+        passes.append(ReplacePACTCausalConv1DPass(symbolic_trace=symbolic_trace))
         # SwapMaxPoolActPass and ReplacePACTCausalConv1DPass inserted nn.Sequential modules
         # containing two submodules. Retrace the network again to separate these
         passes.append(RetracePass(symbolic_trace))
@@ -816,15 +817,17 @@ class IntegerizePACTNetPass(SequentialPass):
             passes.append(TernarizeConvBNActPass())
         else:
         # simply integerize PACTConvs' convolutional weights
-            passes.append(IntegerizePACTConvPass())
-        passes.append(IntegerizePACTLinearPass())
-        passes.append(IntegerizeBNPACTHardActsPass(D1=D1, D2=D2))
-        passes.append(IntegerizeSoftmaxPass(D=D, export_softmax_node=export_softmax_node))
-        passes.append(IntegerizeLayerNormPass(D=D, export_layernorm_node=export_layernorm_node))
-        passes.append(IntegerizeGELUPass(D=D, export_gelu_node=export_gelu_node))
-        passes.append(IntegerizeBNActPass(D, enable_add_first, requant_node=requant_node, skip_identity_rqs=skip_identity_rqs))
-        passes.append(IntegerizeEmbeddingsPass(cmsis_requant=enable_add_first, requant_node=requant_node))
-        passes.append(IntegerizeTrueDivPass(export_div_node=export_div_node))
+            passes.append(IntegerizePACTConvPass(symbolic_trace=symbolic_trace))
+        passes.append(IntegerizePACTLinearPass(symbolic_trace=symbolic_trace))
+        passes.append(IntegerizeBNPACTHardActsPass(D1=D1, D2=D2, symbolic_trace=symbolic_trace))
+        passes.append(IntegerizeSoftmaxPass(D=D, symbolic_trace=symbolic_trace, export_softmax_node=export_softmax_node))
+        passes.append(IntegerizeLayerNormPass(D=D, symbolic_trace=symbolic_trace, export_layernorm_node=export_layernorm_node))
+        
+
+        passes.append(IntegerizeGELUPass(D=D, symbolic_trace=symbolic_trace, export_gelu_node=export_gelu_node))
+        passes.append(IntegerizeBNActPass(D, enable_add_first, symbolic_trace=symbolic_trace, requant_node=requant_node, skip_identity_rqs=skip_identity_rqs))
+        passes.append(IntegerizeEmbeddingsPass(cmsis_requant=enable_add_first, symbolic_trace=symbolic_trace, requant_node=requant_node))
+        passes.append(IntegerizeTrueDivPass(export_div_node=export_div_node, symbolic_trace=symbolic_trace))
         passes.append(IntegerizeMeanPass())
         passes.append(IntegerizeConstWrapPass())
         passes.append(RQSMergePass())
