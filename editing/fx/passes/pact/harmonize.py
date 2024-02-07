@@ -346,7 +346,7 @@ class InsertActivationsAfterLinearsPass(SequentialPass):
         nn.Conv3d,
         nn.Linear,
         PACTLayerNorm,
-        PACTLayerNorm, 
+        PACTRMSNorm, 
         PACTIntegerMatmul, 
         PACTDiv,
         PACTSoftmax, 
