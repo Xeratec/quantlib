@@ -825,34 +825,38 @@ class IntegerizePACTNetPass(SequentialPass):
                  convert_input_to_unsigned : bool = False, D1 : float = 2**18, D2 : float = 2**12,
                  ternarize : bool = False, word_align_channels : bool = False,
                  export_layernorm_node = False, export_softmax_node = False,
-                 export_gelu_node = False, export_div_node = False, export_rmsnorm_node=False,
+                 export_gelu_node = False, export_div_node = False, export_rmsnorm_node=False, export_hardswish_node=False,
                  skip_identity_rqs = True, symbolic_trace = PACT_symbolic_trace, verbose=False):
 
         passes = []
         # start by retracing the network to dissolve any integer ops
-        passes.append(RetracePass(symbolic_trace))
+        # passes.append(RetracePass(symbolic_trace))
         # if there's a MaxPool followed directly by an PACT Activation, swap their positions
         # (will be needed later for the IntegerizeBNActPass)
-        passes.append(SwapMaxPoolActPass(symbolic_trace=symbolic_trace))
+        # passes.append(SwapMaxPoolActPass(symbolic_trace=symbolic_trace))
         # replace all CausalConv1d with a ConstantPad+Conv1d module
-        passes.append(ReplacePACTCausalConv1DPass(symbolic_trace=symbolic_trace))
+        # passes.append(ReplacePACTCausalConv1DPass(symbolic_trace=symbolic_trace))
         # SwapMaxPoolActPass and ReplacePACTCausalConv1DPass inserted nn.Sequential modules
         # containing two submodules. Retrace the network again to separate these
-        passes.append(RetracePass(symbolic_trace))
+        # passes.append(RetracePass(symbolic_trace))
         # then run a shape propagation pass so the conversion functions can
         # know what shape a node's output has
         # IMPORTANT: run model.eval() BEFORE running this pass - otherwise the
         # ShapePropPass will contaminate the batchnorm parameters!
-        passes.append(ShapePropPass(shape_in))
+        # passes.append(ShapePropPass(shape_in))
         # biases of convolutional layers which are not followed by a BN must be
         # folded into a new batchNorm layer and their biases discarded/turned off
-        passes.append(InsertBNBetweenBiasedConvAndActsPass())
+        # passes.append(InsertBNBetweenBiasedConvAndActsPass())
         #make use of the annotated shapes to disassemble layernorms
         # passes.append(LayerNormDisassemblePass()) first step: merge any
         # convolutions with biases into batch norms
-        passes.append(MergeConvBNPass(symbolic_trace))
-        # second step: annotate epsilons and n_levels
+        # passes.append(MergeConvBNPass(symbolic_trace))
+        # second step: annotate epsilons and n_levels 
+        
+        
+        # JUNGVI: RetracePass destroy the activation after the first PACTRMSNorm!!!
         passes.append(AnnotateEpsPass(eps_in, n_levels_in=n_levels_in, verbose=verbose))
+        passes.append(IntegerizeRMSNormPass(D=D, symbolic_trace=symbolic_trace, export_rmsnorm_node=export_rmsnorm_node))
         # if desired, insert "ghost channels"
         if fix_channel_numbers:
             passes.append(FixChannelNumbersPass(word_align=word_align_channels))

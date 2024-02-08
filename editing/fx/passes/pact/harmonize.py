@@ -345,6 +345,7 @@ class InsertActivationsAfterLinearsPass(SequentialPass):
         nn.Conv2d,
         nn.Conv3d,
         nn.Linear,
+        PACTLinear, # JUNGVI: not sure abt that one
         PACTLayerNorm,
         PACTRMSNorm, 
         PACTIntegerMatmul, 

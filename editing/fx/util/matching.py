@@ -44,6 +44,8 @@ class SequentialMatcher:
         # this will be the graph module that we search for the pattern
         self.searched_gm : fx.GraphModule = None
 
+        self.pattern = pattern
+
     @property
     def searched_modules(self):
         # a dictionary of the modules contained in the searched GraphModule
@@ -141,6 +143,12 @@ class SequentialMatcher:
                     for k, n in m.nodes_map.items():
                         if k.op not in ("placeholder", "output"):
                             matched_nodes.add(n)
+
+        # if len(self.pattern) == 2:
+        #     from quantlib.algorithms.pact.pact_ops import PACTRMSNorm
+        #     if isinstance(self.pattern[0], PACTRMSNorm):
+        #         import IPython; IPython.embed()
+        
         return all_matches
 
 def get_ordered_active_nodes(m : Match):
