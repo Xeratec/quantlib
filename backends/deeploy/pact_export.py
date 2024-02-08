@@ -65,6 +65,9 @@ NODES_MAPPING = {
     "iLayerNorm": {
         "op_type": "LayerNormalization",
     },
+    "iRMSNorm": {
+        "op_type": "LayerNormalization",
+    },
     "RequantShift": {
         "op_type": "LayerNormalization",
     },
@@ -177,7 +180,7 @@ def export_net(net: nn.Module,
         "do_constant_folding": True,
     }
     try:
-        torch.onnx._export(net_integerized.to('cpu'), (in_data, ),
+        torch.onnx._export(net_integerized.to('cpu'), in_data,
                            str(onnx_path),
                            opset_version=opset_version,
                            custom_opsets={"PACTOps": 1},
