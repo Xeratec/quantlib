@@ -129,9 +129,9 @@ class IntegerizeTrueDivPass(ModularizePass):
     def truediv_replacement_fn(node, integer_node=False):
         module = dict(node.graph._owning_module.named_modules())[node.target]
         if module.stable:
-            return (PACTIntegerDiv(module.Delta, eps=module.get_eps_div(), eta=module.eta, integer_node=integer_node), node.args, node.kwargs)
+            return (PACTTrueIntegerDiv(module.Delta, eps=module.get_eps_div(), eta=module.eta, integer_node=integer_node), node.args, node.kwargs)
         else:
-            return (PACTIntegerDiv(module.Delta, eps=0*module.get_eps_div(), eta=module.eta, integer_node=integer_node), node.args, node.kwargs)
+            return (PACTTrueIntegerDiv(module.Delta, eps=0*module.get_eps_div(), eta=module.eta, integer_node=integer_node), node.args, node.kwargs)
 
     def __init__(self, Delta=2**14, export_div_node = False, **kwargs):
         self.kwargs = kwargs
@@ -182,7 +182,8 @@ def integerize_rmsnorm_fun(gm : fx.GraphModule, match : Match, affine = True, D=
         new_weight = rmsnorm.weight
         new_rmsnorm = PACTIntegerRMSNorm(n_levels=requant.n_levels, eps_in=eps_in, maxval=maxval, weight=new_weight, D=D, export_node=export_node)
     else:
-        new_rmsnorm = PACTIntegerRMSNorm(n_levels=requant.n_levels, eps_in=eps_in, maxval=maxval, weight = 1., D=D, export_node=export_node)
+        new_weight = torch.ones(rmsnorm.normalized_shape)
+        new_rmsnorm = PACTIntegerRMSNorm(n_levels=requant.n_levels, eps_in=eps_in, maxval=maxval, weight = new_weight, D=D, export_node=export_node)
 
     return new_rmsnorm
 
@@ -830,12 +831,12 @@ class IntegerizePACTNetPass(SequentialPass):
 
         passes = []
         # start by retracing the network to dissolve any integer ops
-        # passes.append(RetracePass(symbolic_trace))
+        #passes.append(RetracePass(symbolic_trace))
         # if there's a MaxPool followed directly by an PACT Activation, swap their positions
         # (will be needed later for the IntegerizeBNActPass)
-        # passes.append(SwapMaxPoolActPass(symbolic_trace=symbolic_trace))
+        passes.append(SwapMaxPoolActPass(symbolic_trace=symbolic_trace))
         # replace all CausalConv1d with a ConstantPad+Conv1d module
-        # passes.append(ReplacePACTCausalConv1DPass(symbolic_trace=symbolic_trace))
+        passes.append(ReplacePACTCausalConv1DPass(symbolic_trace=symbolic_trace))
         # SwapMaxPoolActPass and ReplacePACTCausalConv1DPass inserted nn.Sequential modules
         # containing two submodules. Retrace the network again to separate these
         # passes.append(RetracePass(symbolic_trace))
@@ -843,17 +844,17 @@ class IntegerizePACTNetPass(SequentialPass):
         # know what shape a node's output has
         # IMPORTANT: run model.eval() BEFORE running this pass - otherwise the
         # ShapePropPass will contaminate the batchnorm parameters!
-        # passes.append(ShapePropPass(shape_in))
+        passes.append(ShapePropPass(shape_in))
         # biases of convolutional layers which are not followed by a BN must be
         # folded into a new batchNorm layer and their biases discarded/turned off
         # passes.append(InsertBNBetweenBiasedConvAndActsPass())
         #make use of the annotated shapes to disassemble layernorms
-        # passes.append(LayerNormDisassemblePass()) first step: merge any
+        #passes.append(LayerNormDisassemblePass()) first step: merge any
         # convolutions with biases into batch norms
-        # passes.append(MergeConvBNPass(symbolic_trace))
-        # second step: annotate epsilons and n_levels 
-        
-        
+        passes.append(MergeConvBNPass(symbolic_trace))
+        # second step: annotate epsilons and n_levels
+
+
         # JUNGVI: RetracePass destroy the activation after the first PACTRMSNorm!!!
         passes.append(AnnotateEpsPass(eps_in, n_levels_in=n_levels_in, verbose=verbose))
         passes.append(IntegerizeRMSNormPass(D=D, symbolic_trace=symbolic_trace, export_rmsnorm_node=export_rmsnorm_node))
@@ -873,8 +874,8 @@ class IntegerizePACTNetPass(SequentialPass):
         passes.append(IntegerizeBNPACTHardActsPass(D1=D1, D2=D2, symbolic_trace=symbolic_trace))
         passes.append(IntegerizeSoftmaxPass(D=D, symbolic_trace=symbolic_trace, export_softmax_node=export_softmax_node))
         passes.append(IntegerizeLayerNormPass(D=D, symbolic_trace=symbolic_trace, export_layernorm_node=export_layernorm_node))
-        
-        
+
+
         passes.append(IntegerizeHardswishPass(symbolic_trace=symbolic_trace, export_hardswish_node=export_hardswish_node))
 
         passes.append(IntegerizeGELUPass(D=D, symbolic_trace=symbolic_trace, export_gelu_node=export_gelu_node))

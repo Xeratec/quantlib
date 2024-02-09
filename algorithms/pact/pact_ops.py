@@ -91,6 +91,7 @@ __all__ = [
     'PACTIntegerMean',
     'PACTDiv',
     'PACTIntegerDiv',
+    'PACTTrueIntegerDiv',
     'PACTExp',
     'PACTIntegerExp',
     'ChannelwiseThreshold'
@@ -1227,7 +1228,7 @@ class PACTCausalConv1d(PACTConv1d, _PACTLinOp):
             dil = dilation
         self.__padding = (k-1) * dil
 
-        super(PACTCausalConv1d, self).__init__( 
+        super(PACTCausalConv1d, self).__init__(
             in_channels,
             out_channels,
             kernel_size,
@@ -1440,11 +1441,11 @@ class PACTIntegerHardswish(nn.Module):
             x = torch.clip(x, z, six)
             x = x * one_over_six
             return inp * x
-        
+
         @staticmethod
         @parse_args('v', 'i', 'i', 'i')
         def symbolic(g, x, three, six, one_over_six):
-            return g.op("PACTOps::iHardswish", x, three, six, one_over_six)
+            return g.op("PACTOps::iHardswish", x, three_i = three, six_i = six, one_over_six_i = one_over_six)
 
     def __init__(self, eps_in : float, eps_s : float, export_node: bool = False):
         super(PACTIntegerHardswish, self).__init__()
@@ -1463,9 +1464,8 @@ class PACTIntegerHardswish(nn.Module):
         self.register_buffer("one_over_six", one_over_six_q)
 
     def forward(self, x):
-        print(self.export_node)
         if self.export_node:
-            return self.MyHardswish.apply(x, self.three.item(), self.six.item(), self.one_over_six.item())
+            return self.MyHardswish.apply(x, int(self.three.item()), int(self.six.item()), int(self.one_over_six.item()))
         else:
             return self.MyHardswish.forward(x, self.three, self.six, self.one_over_six)
 
@@ -2455,7 +2455,7 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
 
         y = self.div(nom, denom) + b
         return y
-    
+
 class PACTIntegerRMSNorm(torch.nn.Module):
 
     class MyRMSNorm(torch.autograd.Function):
@@ -2467,20 +2467,17 @@ class PACTIntegerRMSNorm(torch.nn.Module):
 
             nom = nom * weight
 
-            y = (torch.div(nom,denom)).int().float()
+            y = (torch.div(nom,denom))
 
             y = torch.floor(y/(D))
             y = torch.clip(y, -n_levels//2, n_levels//2-1)
             return y
 
         @staticmethod
-        @parse_args('v','v','t','t')
+        @parse_args('v','v','i','i')
         def symbolic(g, x, weight, D, n_levels):
 
-            n_levels_ = g.op("Constant", value_t=n_levels)
-            D_ = g.op("Constant", value_t=D)
-
-            return g.op("PACTOps::iRMSNorm", x, weight, D_t=D, n_levels_t=n_levels)
+            return g.op("PACTOps::iRMSNorm", x, weight, D_i=D, n_levels_i=n_levels)
 
 
     def __init__(self, n_levels: int = 256, eps_in : float = 1., maxval: float = 1., weight : torch.Tensor = torch.Tensor((1.,)), D=2**24, export_node=False, **kwargs):
@@ -2519,11 +2516,11 @@ class PACTIntegerRMSNorm(torch.nn.Module):
 
         else:
             self.register_buffer("totScaler",torch.Tensor((torch.round(self.D * (n_levels//2-1)/maxval ),)).detach())
-            self.register_buffer("weight",self.totScaler)
+            self.register_buffer("weight",self.totScaler.clone().detach())
 
     def forward(self, x):
         if self.export_node:
-            return self.MyRMSNorm.apply(x, self.weight.type_as(x), self.D.type_as(x), self.n_levels.type_as(x))
+            return self.MyRMSNorm.apply(x, self.weight.type_as(x), int(self.D.item()), int(self.n_levels.item()))
         else:
             return self.MyRMSNorm.forward(None, x, self.weight.type_as(x), self.D.type_as(x), self.n_levels.type_as(x))
 
@@ -3136,9 +3133,9 @@ class PACTIntegerDiv(nn.Module):
 
     def __init__(self, Delta, integer_node=True, eps=1., eta=1.):
         super().__init__()
-        self.register_buffer('Delta',torch.Tensor((Delta,)))
-        self.register_buffer('eps',torch.Tensor((eps,)))
-        self.register_buffer('eta', torch.Tensor((eta,)))
+        self.register_buffer('Delta',torch.Tensor((int(Delta),)))
+        self.register_buffer('eps',torch.Tensor((int(eps),)))
+        self.register_buffer('eta', torch.Tensor((int(eta),)))
         self.integer_node = integer_node
 
     def forward(self,x,y):
@@ -3149,10 +3146,52 @@ class PACTIntegerDiv(nn.Module):
         #         return x
         #     return x * self.Delta
 
+        if not isinstance(y, torch.Tensor):
+            raise Exception("IntegerDiv trying to divide by const!")
+
         if self.integer_node:
+
             return self.MyIntegerDiv.apply(x,y,int(self.Delta.item()),int(self.eps.item()), int(self.eta.item()))
         else:
             return self.MyIntegerDiv.forward(None, x,y,self.Delta,self.eps, self.eta)
+
+class PACTTrueIntegerDiv(nn.Module):
+
+    class MyTrueIntegerDiv(torch.autograd.Function):
+
+        @staticmethod
+        def forward(ctx, x, y, Delta, eps, eta):
+            return torch.floor((x * Delta * eta / (y*eta + eps)) + 0.5)
+
+        @staticmethod
+        @parse_args('v','i','i', 'i', 'i')
+        def symbolic(g, x, y, Delta, eps, eta):
+            return g.op("PACTOps::TrueIntegerDiv", x, y_i = y, Delta_i = Delta, eps_i=eps, eta_i = eta)
+
+    def __init__(self, Delta, integer_node=True, eps=1., eta=1.):
+        super().__init__()
+        self.register_buffer('Delta',torch.Tensor((int(Delta),)))
+        self.register_buffer('eps',torch.Tensor((int(eps),)))
+        self.register_buffer('eta', torch.Tensor((int(eta),)))
+        self.integer_node = integer_node
+
+    def forward(self,x,y):
+        # SCHEREMO: Shortcut degenerate cases (y == 1, eps == 0)
+        # y = torch.Tensor((y,))
+        # if torch.prod((y == torch.ones_like(y)) * (self.eps == torch.zeros_like(self.eps))) == 1.:
+        #     if self.Delta == 1:
+        #         return x
+        #     return x * self.Delta
+
+        if isinstance(y, torch.Tensor):
+            raise Exception("TrueIntegerDiv trying to divide by tensor!")
+
+        if self.integer_node:
+
+            return self.MyTrueIntegerDiv.apply(x,int(y),int(self.Delta.item()),int(self.eps.item()), int(self.eta.item()))
+        else:
+            return self.MyTrueIntegerDiv.forward(None, x,y,self.Delta,self.eps, self.eta)
+
 
 class PACTConstWrap(nn.Module):
     def __init__(self, eps=1.):
