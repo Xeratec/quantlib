@@ -831,7 +831,7 @@ class IntegerizePACTNetPass(SequentialPass):
 
         passes = []
         # start by retracing the network to dissolve any integer ops
-        #passes.append(RetracePass(symbolic_trace))
+        passes.append(RetracePass(symbolic_trace))
         # if there's a MaxPool followed directly by an PACT Activation, swap their positions
         # (will be needed later for the IntegerizeBNActPass)
         passes.append(SwapMaxPoolActPass(symbolic_trace=symbolic_trace))
@@ -839,7 +839,7 @@ class IntegerizePACTNetPass(SequentialPass):
         passes.append(ReplacePACTCausalConv1DPass(symbolic_trace=symbolic_trace))
         # SwapMaxPoolActPass and ReplacePACTCausalConv1DPass inserted nn.Sequential modules
         # containing two submodules. Retrace the network again to separate these
-        # passes.append(RetracePass(symbolic_trace))
+        passes.append(RetracePass(symbolic_trace))
         # then run a shape propagation pass so the conversion functions can
         # know what shape a node's output has
         # IMPORTANT: run model.eval() BEFORE running this pass - otherwise the
@@ -847,7 +847,7 @@ class IntegerizePACTNetPass(SequentialPass):
         passes.append(ShapePropPass(shape_in))
         # biases of convolutional layers which are not followed by a BN must be
         # folded into a new batchNorm layer and their biases discarded/turned off
-        # passes.append(InsertBNBetweenBiasedConvAndActsPass())
+        passes.append(InsertBNBetweenBiasedConvAndActsPass())
         #make use of the annotated shapes to disassemble layernorms
         #passes.append(LayerNormDisassemblePass()) first step: merge any
         # convolutions with biases into batch norms
@@ -871,7 +871,7 @@ class IntegerizePACTNetPass(SequentialPass):
         # simply integerize PACTConvs' convolutional weights
             passes.append(IntegerizePACTConvPass(symbolic_trace=symbolic_trace))
         passes.append(IntegerizePACTLinearPass(symbolic_trace=symbolic_trace))
-        passes.append(IntegerizeBNPACTHardActsPass(D1=D1, D2=D2, symbolic_trace=symbolic_trace))
+        #passes.append(IntegerizeBNPACTHardActsPass(D1=D1, D2=D2, symbolic_trace=symbolic_trace))
         passes.append(IntegerizeSoftmaxPass(D=D, symbolic_trace=symbolic_trace, export_softmax_node=export_softmax_node))
         passes.append(IntegerizeLayerNormPass(D=D, symbolic_trace=symbolic_trace, export_layernorm_node=export_layernorm_node))
 
