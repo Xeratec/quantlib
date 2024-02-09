@@ -345,12 +345,11 @@ class InsertActivationsAfterLinearsPass(SequentialPass):
         nn.Conv2d,
         nn.Conv3d,
         nn.Linear,
-        PACTLinear, # JUNGVI: not sure abt that one
         PACTLayerNorm,
-        PACTRMSNorm, 
-        PACTIntegerMatmul, 
+        PACTRMSNorm,
+        PACTIntegerMatmul,
         PACTDiv,
-        PACTSoftmax, 
+        PACTSoftmax,
         PACTGELU,
     )
 
@@ -362,7 +361,7 @@ class InsertActivationsAfterLinearsPass(SequentialPass):
     def __init__(self, signed : bool = True, **kwargs):
         self.name = "PACT_LINEAR_ACTIVATIONS"
         super(InsertActivationsAfterLinearsPass, self).__init__(name_prefix=self.name)
-        
+
         self.signed = signed
         default_kwargs = {'learn_clip' : True, 'tqt' : True, 'init_clip' : 'max', 'act_kind' : 'identity'}
         default_kwargs.update(kwargs)
@@ -394,7 +393,7 @@ class InsertActivationsAfterLinearsPass(SequentialPass):
         linop_list = []
         offenders = []
 
-        while node.op != 'placeholder':
+        while node._prev != output_node:
             if (node.target in modules.keys()) and any(isinstance(modules[node.target], pattern) for pattern in linear_op_nodes):
                 linop_list.append(node)
             node = node._prev
