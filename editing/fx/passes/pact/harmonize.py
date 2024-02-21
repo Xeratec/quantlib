@@ -288,21 +288,21 @@ class ConcatTreeReplacementPass(SequentialPass):
     cat_node_specs = [('call_function', (torch.cat,))]
     stack_node_specs = [('call_function', (torch.stack,))]
 
-    def __init__(self, n_levels : int = 256, init_clip : str = 'max', learn_clip = True, nb_std : float = 3.):
-        self.n_levels = n_levels
-        self.init_clip = init_clip
-        self.learn_clip = learn_clip
-        self.nb_std = nb_std
+    def __init__(self, **kwargs):
+
+        default_kwargs = {"n_levels": 256, "init_clip": "max", "nb_std": 3., "learn_clip": True, "act_kind": "identity"}
+        default_kwargs.update(kwargs)
+        self.kwargs = default_kwargs
         passes = []
         passes.append(OpTreeReplacementPass(node_specs=self.cat_node_specs, replacement_fn=self.cat_replacement_fn, name="CONCAT", always_terminate=True))
         passes.append(OpTreeReplacementPass(node_specs=self.stack_node_specs, replacement_fn=self.stack_replacement_fn, name="STACK", always_terminate=True))
         super(ConcatTreeReplacementPass, self).__init__(*passes, name_prefix="_QL_REPLACE_CAT_STACK")
 
     def cat_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
-        return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', learn_clip=self.learn_clip, init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=False, **(tree.kwargs))
+        return PACTIntegerConcat(num_args=len(tree.args), **self.kwargs, stack_flag=False, **(tree.kwargs))
 
     def stack_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
-        return PACTIntegerConcat(num_args=len(tree.args), n_levels=self.n_levels, act_kind='identity', learn_clip=self.learn_clip, init_clip=self.init_clip, nb_std=self.nb_std, stack_flag=True, **(tree.kwargs))
+        return PACTIntegerConcat(num_args=len(tree.args), **self.kwargs, stack_flag=True, **(tree.kwargs))
 
 class InsertActivationsBetweenLinearsPass(InsertModuleBetweenModulesPass):
     before_modules = (nn.Conv1d,
@@ -346,7 +346,7 @@ class InsertActivationsAfterLinearsPass(SequentialPass):
         nn.Conv3d,
         nn.Linear,
         PACTLayerNorm,
-        PACTLayerNorm,
+        PACTRMSNorm,
         PACTIntegerMatmul,
         PACTDiv,
         PACTSoftmax,
@@ -393,7 +393,7 @@ class InsertActivationsAfterLinearsPass(SequentialPass):
         linop_list = []
         offenders = []
 
-        while node.op != 'placeholder':
+        while node._prev != output_node:
             if (node.target in modules.keys()) and any(isinstance(modules[node.target], pattern) for pattern in linear_op_nodes):
                 linop_list.append(node)
             node = node._prev
@@ -569,9 +569,9 @@ def apply_wrap_module_fun(node, _pass, _tracer):
     return returnNode, node.args, node.kwargs
 
 class ApplyPassToWrapModule(ModularizePass):
-    def __init__(self, _pass, name=''):
+    def __init__(self, _pass, name='', symbolic_nodes: set = PACT_OPS_INCLUSIVE):
         pattern = [PACTWrapModule(nn.Identity(), n_levels=256)]
-        tracer = LeafTracer(PACT_OPS_INCLUSIVE)
+        tracer = LeafTracer(symbolic_nodes)
         trace = partial(custom_symbolic_trace, tracer=tracer)
 
         super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(apply_wrap_module_fun, _pass=_pass, _tracer=tracer), name=f"APPLY_TO_WRAP_PASS_{name}")

@@ -28,10 +28,11 @@ import torch
 from torch import nn
 
 import onnx
+import onnxruntime
 
 import quantlib.editing.fx as qlfx
 from quantlib.editing.lightweight import LightweightGraph
-from quantlib.algorithms.pact import RequantShift, PACTIntegerLayerNorm, PACTIntegerGELU, PACTWrapMHSA, PACTWrapModule
+from quantlib.algorithms.pact import RequantShift, PACTIntegerLayerNorm, PACTIntegerGELU, PACTWrapMHSA, PACTWrapModule, PACTIntegerHardswish, PACTTrueIntegerDiv, PACTIntegerRMSNorm
 
 # Import ONNX runtime
 from onnxruntime.tools.symbolic_shape_infer import SymbolicShapeInference
@@ -65,6 +66,9 @@ NODES_MAPPING = {
     "iLayerNorm": {
         "op_type": "LayerNormalization",
     },
+    "iRMSNorm": {
+        "op_type": "LayerNormalization",
+    },
     "RequantShift": {
         "op_type": "LayerNormalization",
     },
@@ -83,6 +87,12 @@ NODES_MAPPING = {
     },
     "IntegerDiv": {
         "op_type": "Div",
+    },
+    "TrueIntegerDiv": {
+        "op_type": "Relu",
+    },
+    "iHardswish": {
+        "op_type": "Relu",
     },
     # Copy original attribute to replaced node
     "IntegerMean": {
@@ -165,8 +175,8 @@ def export_net(net: nn.Module,
             export_layernorm_node = True,
             export_softmax_node = True,
             export_gelu_node = True,
-            export_div_node = True,
-            export_unity_rqs=True)
+            export_div_node = True)
+            
         net_integerized = int_pass(net_traced)
         print("[QuantLab] === Integer PyTorch Network ===")
         print(net_integerized.modules)
@@ -181,7 +191,7 @@ def export_net(net: nn.Module,
         "do_constant_folding": True,
     }
     try:
-        torch.onnx._export(net_integerized.to('cpu'), (in_data, ),
+        torch.onnx._export(net_integerized.to('cpu'), in_data,
                            str(onnx_path),
                            opset_version=opset_version,
                            custom_opsets={"PACTOps": 1},
@@ -249,6 +259,10 @@ def export_net(net: nn.Module,
         enable_skip_layer_norm=False,
         enable_bias_gelu=False,
     )
+
+    if onnxruntime.__version__ >= "1.17":
+        optimization_config.enable_rotary_embeddings = False
+
     optimizer = optimize_model(str(onnx_path), optimization_options=optimization_config)
     optimizer.save_model_to_file(str(onnx_path))
 
@@ -275,8 +289,16 @@ def export_net(net: nn.Module,
     acts = []
 
     def dump_hook(self, inp, outp, name):
-        name = name.lower().replace(".", "_")
-        acts.append((name, torch.round(outp)))
+        _name = name.lower().replace(".", "_")
+        if isinstance(inp, torch.Tensor):
+            inpNan = any([torch.sum(torch.isnan(inp)) > 0])
+        else:
+            inpNan = any([torch.sum(torch.isnan(y)) > 0 for y in inp if isinstance(y, torch.Tensor)])
+        outpNan = torch.sum(torch.isnan(outp)) > 0
+        if inpNan or outpNan:
+            raise Exception("Caught NaN in intermediate activations!")
+
+        acts.append((_name, torch.round(outp)))
 
     integerized_nodes = LightweightGraph.build_nodes_list(net_integerized, leaf_types=(PACTWrapMHSA, ))
     for n in integerized_nodes:
@@ -285,22 +307,43 @@ def export_net(net: nn.Module,
             (RequantShift, nn.Conv2d, nn.Conv1d, nn.AdaptiveAvgPool1d,
              nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d, nn.AvgPool1d,
              nn.AvgPool2d, nn.AvgPool3d, nn.MaxPool1d, nn.MaxPool2d,
-             nn.MaxPool3d, nn.Linear, PACTIntegerLayerNorm, PACTIntegerGELU,
+             nn.MaxPool3d, nn.Linear, PACTIntegerLayerNorm, PACTIntegerGELU, PACTIntegerRMSNorm,
+             PACTIntegerHardswish, PACTTrueIntegerDiv,
              PACTWrapMHSA)):
             hook = partial(dump_hook, name=n.name)
             n.module.register_forward_hook(hook)
 
     # Open the supplied input image
     if in_data is not None:
-        input = in_data.clone().to(dtype=torch.float64)
+
         net_integerized = net_integerized.to(dtype=torch.float64)
-        output = net_integerized(input).to(dtype=torch.float64)
 
-        input_np = torch.round(input.detach()).numpy().astype(np.int64)
-        output_np = torch.round(output.detach()).numpy().astype(np.int64)
+        if isinstance(in_data, torch.Tensor):
+            input = in_data.clone().to(dtype=torch.float64)
+            input_np = [torch.round(input.detach()).numpy().astype(np.int64)]
+            _output = net_integerized(input).to(dtype=torch.float64)
+        else:
+            input = [t.clone().to(dtype=torch.float64) for t in in_data]
+            input_np = [torch.round(t.detach()).numpy().astype(np.int64) for t in input]
+            _output = net_integerized(*input)
 
-        np.savez(out_path.joinpath("inputs.npz"), input=input_np)
-        np.savez(out_path.joinpath("outputs.npz"), output=output_np)
+        if isinstance(_output, torch.Tensor):
+            _output.to(dtype=torch.float64)
+            output = _output
+            output_np = [torch.round(output.detach()).numpy().astype(np.int64)]
+        else:
+            output = [t.to(dtype=torch.float64) for t in _output if isinstance(t, torch.Tensor)]
+            output_np = [torch.round(t.detach()).numpy().astype(np.int64) for t in output]
+
+        inputkwargs = {}
+        for idx, array in enumerate(input_np):
+            inputkwargs[f"input_{idx}"] = array
+        outputkwargs = {}
+        for idx, array in enumerate(output_np):
+            outputkwargs[f"output_{idx}"] = array
+
+        np.savez(out_path.joinpath("inputs.npz"),**inputkwargs)
+        np.savez(out_path.joinpath("outputs.npz"), **outputkwargs)
 
         acts_np = {}
         for _, (lname, t) in enumerate(acts):
@@ -308,9 +351,11 @@ def export_net(net: nn.Module,
 
         np.savez(out_path.joinpath("activations.npz"), **acts_np)
 
-        # out_path.joinpath("activations/").mkdir(parents=True, exist_ok=True)
+        out_path.joinpath("activations/").mkdir(parents=True, exist_ok=True)
 
-        # save_beautiful_text(input_np, "input_0", out_path.joinpath("activations/input.txt"))
-        # save_beautiful_text(output_np, "output_0", out_path.joinpath("activations/output.txt"))
-        # for jdx, lname in enumerate(acts_np):
-        #     save_beautiful_text(acts_np[lname], lname, out_path.joinpath(f"activations/act{jdx:02d}_{lname}.txt"))
+        for idx, array in enumerate(output_np):
+            save_beautiful_text(array, f"input_{idx}", out_path.joinpath(f"activations/input_{idx}.txt"))
+        for idx, array in enumerate(output_np):
+            save_beautiful_text(array, f"output_{idx}", out_path.joinpath(f"activations/output_{idx}.txt"))
+        for jdx, lname in enumerate(acts_np):
+            save_beautiful_text(acts_np[lname], lname, out_path.joinpath(f"activations/act{jdx:02d}_{lname}.txt"))
