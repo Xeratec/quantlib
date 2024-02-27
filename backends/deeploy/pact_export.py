@@ -26,6 +26,8 @@ from functools import partial
 from pathlib import Path
 import numpy as np
 
+from typing import List, Union
+
 import torch
 from torch import nn
 
@@ -147,6 +149,19 @@ def save_beautiful_text(t: np.ndarray, layer_name: str, filepath: str):
 
                 if t.ndim >= 3: fp.write("]\n")
             if t.ndim >= 4: fp.write("]\n")
+
+def flattenOutput(inList: List[Union[torch.Tensor, List[torch.Tensor]]]) -> List[torch.Tensor]:
+
+    _list = []
+
+    for inp in inList:
+        if isinstance(inp, torch.Tensor):
+            _list.append(inp)
+        else:
+            _list += flattenOutput(inp)
+
+    return _list
+
 
 def export_net(net: nn.Module,
                name: str,
@@ -330,7 +345,8 @@ def export_net(net: nn.Module,
             output = _output
             output_np = [torch.round(output.detach()).numpy().astype(np.int64)]
         else:
-            output = [t.to(dtype=torch.float64) for t in _output if isinstance(t, torch.Tensor)]
+            output = flattenOutput(_output)
+            output = [t.to(dtype=torch.float64) for t in output if isinstance(t, torch.Tensor)]
             output_np = [torch.round(t.detach()).numpy().astype(np.int64) for t in output]
 
         inputkwargs = {}

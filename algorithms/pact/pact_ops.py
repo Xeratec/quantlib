@@ -3154,7 +3154,7 @@ class PACTTrueIntegerDiv(nn.Module):
 
         @staticmethod
         def forward(ctx, x, y, Delta, eps, eta):
-            return torch.floor((x * Delta * eta / (y*eta + eps)) + 0.5)
+            return torch.trunc((x * Delta * eta / (y*eta + eps)))
 
         @staticmethod
         @parse_args('v','i','i', 'i', 'i')
