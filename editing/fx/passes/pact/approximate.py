@@ -43,36 +43,49 @@ from ...util.tracing import LeafTracer, custom_symbolic_trace
 
 from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace, PACT_symbolic_trace_inclusive
 
-def replSoftmax(gm : fx.GraphModule, match : Match, mode: str):
+def replSoftmax(gm : fx.GraphModule, match : Match, mode: str, act_cfg: dict, **kwargs):
+
+
+    default_act_kwargs = {
+        'learn_clip' : True,
+        'tqt' : True,
+        'init_clip' :'max',
+        'act_kind' : 'identity',
+    }
+    default_act_kwargs.update(act_cfg)
+
     if mode == "I-BERT":
-        replacement_class = PACTSoftmax()
-    elif mode=='ITA':
-        replacement_class = PACTITAMax()
-    elif mode=='ITA-Partial':
-        replacement_class = PACTITAPartialMax()
+        # Insert unsigned activation before softmax
+        replacement_class = nn.Sequential(PACTAsymmetricAct(**default_act_kwargs), PACTSoftmax(**kwargs))
+    else:
+        cfg = {**default_act_kwargs, **kwargs}
+
+        if mode=='ITA':
+            replacement_class = PACTITAMax(**cfg)
+        elif mode=='ITA-Partial':
+            replacement_class = PACTITAPartialMax(**cfg)
 
     return replacement_class
 
 class ApproximateSoftmaxPass(SequentialPass):
-
     modes = ["I-BERT", "ITA", 'ITA-Partial']
 
-    def __init__(self, custom_trace, mode: Literal["I-BERT", "ITA", 'ITA-Partial'] = "I-BERT", **kwargs):
+    def __init__(self, custom_trace: callable = PACT_symbolic_trace, mode: Literal["I-BERT", "ITA", 'ITA-Partial'] = "I-BERT", act_cfg={}, **kwargs):
         passes = []
         pattern = nn.Sequential(nn.Softmax())
         assert mode in self.modes, f"[ApproximateSoftmaxPass] Invalid mode {mode} specified!"
-        passes.append(ReplaceSequentialPatternPass(pattern, custom_trace, partial(replSoftmax, mode=mode), f'_APPROXIMATE_SOFTMAX_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, custom_trace, partial(replSoftmax, mode=mode, act_cfg=act_cfg, **kwargs), f'_APPROXIMATE_SOFTMAX_PASS'))
         super().__init__(*passes, name_prefix='_APPROXIMATE_SOFTMAX_PASS')
 
 class ApproximateGELUPass(SequentialPass):
-    def __init__(self, **kwargs):
+    def __init__(self, custom_trace: callable = PACT_symbolic_trace, **kwargs):
         passes = []
         pattern = nn.Sequential(nn.GELU())
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, lambda x,y: PACTGELU(), f'_APPROXIMATE_GELU_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, custom_trace, lambda x,y: PACTGELU(), f'_APPROXIMATE_GELU_PASS'))
         super().__init__(*passes, name_prefix='_APPROXIMATE_GELU_PASS')
 
 class ApproximateSiLUWithGELUPass(SequentialPass):
-    def __init__(self, custom_trace, **kwargs):
+    def __init__(self, custom_trace: callable = PACT_symbolic_trace, **kwargs):
         passes = []
         pattern = nn.Sequential(nn.SiLU())
         passes.append(ReplaceSequentialPatternPass(pattern, custom_trace, lambda x,y: PACTHardswish(eps_s=0.005), f'_APPROXIMATE_SILU_PASS'))
@@ -92,10 +105,10 @@ def layernorm_replacement_fun(gm : fx.GraphModule, match : Match, *args, **kwarg
     return new_layernorm
 
 class CanonicalizeLayerNormPass(SequentialPass):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, custom_trace: callable = PACT_symbolic_trace, *args, **kwargs):
         passes = []
         pattern = nn.Sequential(nn.LayerNorm(1))
-        passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, partial(layernorm_replacement_fun, *args, **kwargs), f'_CANONICALIZE_LAYERNORM_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, custom_trace, partial(layernorm_replacement_fun, *args, **kwargs), f'_CANONICALIZE_LAYERNORM_PASS'))
         super().__init__(*passes, name_prefix='_CANONICALIZE_LAYERNORM_PASS')
 
 def embedding_replacement_fun(gm : fx.GraphModule, match : Match, n_levels: int = 256):

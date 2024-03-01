@@ -620,6 +620,7 @@ class PACTIntegerConcat(torch.nn.Module):
                 i.clip_lo.data.copy_(torch.Tensor((-(self.n_levels/2)*eps,)))
                 i.clip_hi.data.copy_(torch.Tensor(((self.n_levels/2 - 1)*eps,)))
 
+
     def forward(self, *x):
         if self.stack_flag:
             z = list(map(lambda x: torch.unsqueeze(x, self.dim), x))
@@ -736,13 +737,6 @@ class PACTIntegerAdd(torch.nn.Module):
 class PACTIntegerMatmul(torch.nn.Module):
     def __init__(
             self,
-            n_levels=256,
-            init_clip='max',
-            learn_clip=True,
-            act_kind='relu',
-            symm=False,
-            leaky=0,
-            nb_std=3,
             **kwargs
     ):
 
@@ -1719,7 +1713,7 @@ class PACTIntegerExp(torch.nn.Module):
             return self.MyExp.forward(None, x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
 
 class PACTSoftmax(_PACTEps):
-    def __init__(self, n_levels : int = 256, dim: int = 1):
+    def __init__(self, n_levels : int = 256, dim: int = -1):
         super().__init__(True)
         self.n_levels = n_levels
         self.dim = dim
@@ -1740,6 +1734,9 @@ class PACTSoftmax(_PACTEps):
         self.coeffB.data[0] = torch.round(1.353/eps) * eps
         self.coeffC.data[0] = torch.round(0.344/(eps**2*eps2)) * eps**2*eps2
         self.log2.data[0] = torch.round(math.log2(2)/(eps)) * eps
+
+    def extra_repr(self):
+        return f"n_levels={self.n_levels}, dim={self.dim}"
 
     def forward(self, x):
 
@@ -1848,15 +1845,40 @@ class PACTITAMax(_PACTEps):
         kwargs_stats.update(kwargs)
 
         self.act = PACTAsymmetricAct(**kwargs_stats)
+
+        self.stats = PACTAsymmetricAct(**kwargs_stats)
+
         self.n_levels = n_levels
 
         self.B = math.log2( self.n_levels )
-        self.eps_max = torch.Tensor( (self.B / (2**self.B),) )
 
-    def set_eps_in(self, eps_list):
-        super().set_eps_in(eps_list)
+        self.log2e = torch.Tensor( (math.log2(math.exp(1)),) )
 
-    def forward(self, x):
+        # Maximum meaningfull scaling factor that does results in non-zero values after the softmax operation
+        self.eps_max = torch.Tensor( (self.B / (2**self.B * math.log2(math.exp(1)) ),) )
+
+        # Minimum meaningfull scaling factor that does not result in non-equal values after the softmax operation
+        # self.eps_min =
+
+    @property
+    def pact_repr_str(self):
+        return f", n_levels={self.n_levels}"
+
+    def extra_repr(self):
+        # this might be a little bit dangerous - always inherit from the
+        # nn.Module you're extending FIRST and PACTLinOp SECOND
+        r = super(self.__class__, self).extra_repr()
+        r += self.pact_repr_str
+        return r
+
+    def get_eps_in(self):
+        # Restrict the epsilon to the maximum meaningful value
+        if self.started:
+            return torch.min(self._eps_in, self.eps_max)
+        else:
+            return self._eps_in
+
+    def forward(self, x, dim=-1):
 
         def RQ(x, eps, round=True):
             if self.started:
@@ -1867,40 +1889,57 @@ class PACTITAMax(_PACTEps):
                     x = torch.floor(x/eps + torch.finfo(x.dtype).eps)*eps
             return x
 
-        _, H, S, _ = x.size()
+        _, H, S, S2 = x.size()
+
+        assert torch.sum(torch.isnan(x)) == 0, "NaNs in input"
 
         # Gather statistics about inputs
-        _ = self.act(x)
+        _ = self.stats(x)
 
-        ######################## Requantized and Shift ########################¼
+        ######################## Recenter and RQS ########################¼
+
         with torch.no_grad():
-            # Center inputs around zero
-            # eps = torch.minimum(self.eps_max.type_as(x), self.eps_in)
-            eps = self.eps_max.type_as(x)
+            # Calculate the zero point based on gathered statstics
 
-            if self.act.started:
-                # Use maximum gather by statistics
-                x = x - torch.repeat_interleave(self.act.max, H*S*S).reshape(-1, H, S, S) + (((self.n_levels-1)/2))*eps
-            else:
-                # Use actual maximum
-                global_max = torch.max(x, dim = -1)[0]
-                x = x - torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) + (((self.n_levels-1)/2))*eps
+            t_view = x.view(-1, S2)
+            max_vector = torch.max(t_view, dim = 0)[0]
 
-            # Get quantized values
-            x = RQ(x/eps, 1, round=True)
+            # global_max = torch.max(x, dim = -1)[0]
+            global_max = max_vector
 
-            # Clip quantized values
-            x = torch.clamp(x, min=-128, max=127)
+            zero_point = torch.max(torch.tensor((0.0,)), global_max- self.eps_in / 2 * ( self.n_levels//2) / (self.n_levels//2 - 1))
+
+            # zero_point = torch.max(torch.tensor((0.0,)), self.stats.max - self.eps_in / 2 * ( self.n_levels) / (self.n_levels - 1))
+
+        # Recenter values
+        x_s = x - torch.repeat_interleave(zero_point, H*S).reshape(-1, H, S, S)
+        # x_s = x - torch.repeat_interleave(zero_point, S).reshape(-1, H, S, S)
+        # x_s = x - zero_point
+
+        # Requantize values
+        if self.started:
+            clip_lower = - self.eps_in * (self.n_levels) / 2
+            clip_upper = AlmostSymmQuantFunc.apply(clip_lower, self.n_levels)
+            with torch.no_grad():
+                x_rqs = PACTQuantize(x_s, self.eps_in, clip_lower, clip_upper, floor=False, clip_gradient=True)
+        else:
+            x_rqs = x_s
         ########################################################################
+        if self.started:
+            pass#import IPython; IPython.embed()
+
+        # Get quantized integer values
+        with torch.no_grad():
+            x_i = RQ(x_rqs/self.eps_in, 1, round=True)
 
         # Find maximum for each row
-        global_max = torch.max(x, dim = -1)[0]
+        global_max = torch.max(x_i, dim = -1)[0]
 
         # Find the difference between the maximum and x in the current part of the row
-        diff = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) - x
+        diff = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) - x_i
 
-        # Shift the values by B-log2B -> multiply by B/2**B = eps_max = log2e * eps_in
-        shift = RQ(diff*self.eps_max.type_as(x), 1, round = True)
+        # Multiply by eps_2 = log2e * eps_in
+        shift = RQ(diff * self.eps_in * self.log2e, 1, round = True)
 
         # Update the accumulated sum and add the accumulation over the current part of the row
         exp_sum = RQ(torch.sum(self.n_levels / 2**shift, dim = -1), 1, round = False)
@@ -2007,7 +2046,7 @@ class PACTITAPartialMax(_PACTEps):
         _, H, S, _ = x.size()
 
         groups = S // self.width
-        assert S % self.width == 0, f"[PACTITAPartialMax] The sequence length must be a multiple of the group width ({group_width}!"
+        assert S % self.width == 0, f"[PACTITAPartialMax] The sequence length ({S}) must be a multiple of the group width ({self.width})!"
 
         # Gather statistics about inputs
         _ = self.act(x)
@@ -2446,6 +2485,8 @@ class PACTLayerNorm(_PACTEps, _PACTLinOp):
         if self.started:
             assert eps>=self.eps_in**2, f"Eps was rounded down in PACTLayerNorm, eta = {self.eta}, eps = {self.eps}, eps_in = {self.eps_in}"
 
+        assert torch.sum(torch.isnan(var)) == 0, f"Variance has nan values in PACTLayerNorm, eta = {self.eta}, eps = {self.eps}, eps_in = {self.eps_in}, var = {var}"
+        assert torch.prod(var > torch.zeros_like(var)), f"Variance is zero or negative in PACTLayerNorm, eta = {self.eta}, eps = {self.eps}, eps_in = {self.eps_in}, var = {var}"
         denom = RQ(torch.sqrt(var + eps), self.eps_in)
 
         if self.started:
@@ -3050,6 +3091,12 @@ class PACTDiv(_PACTEps):
         self.register_buffer('eps_in_y', torch.Tensor((eps_div,)))
 
         self.set_eps_in([torch.Tensor((eps_div,)), torch.Tensor((eps_div,))])
+
+
+    def extra_repr(self):
+        # this might be a little bit dangerous - always inherit from the
+        # nn.Module you're extending FIRST and PACTLinOp SECOND
+        return f"Delta={self.Delta}, stable={self.stable}, autoscale={self.autoscale}"
 
     def set_eps_in(self, eps_in_list):
         if len(eps_in_list) == 2:

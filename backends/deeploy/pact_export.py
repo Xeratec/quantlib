@@ -48,6 +48,7 @@ class OptimizationConfig:
     enable_gelu: bool = True
     enable_layer_norm: bool = True
     enable_attention: bool = True
+    enable_rotary_embeddings: bool = True
     enable_skip_layer_norm: bool = False
     enable_embed_layer_norm: bool = False
     enable_bias_skip_layer_norm: bool = False
@@ -155,6 +156,7 @@ def export_net(net: nn.Module,
                n_levels_in=256,
                D: float = 2**24,
                opset_version: int = 10,
+               onnx_shape_inference = False,
                code_size=0):
     net = net.eval()
 
@@ -195,7 +197,7 @@ def export_net(net: nn.Module,
                            str(onnx_path),
                            opset_version=opset_version,
                            custom_opsets={"PACTOps": 1},
-                           onnx_shape_inference=False,
+                           onnx_shape_inference=onnx_shape_inference,
                            verbose=False,
                            keep_initializers_as_inputs = False,
                            **kwargs)
@@ -314,6 +316,7 @@ def export_net(net: nn.Module,
             n.module.register_forward_hook(hook)
 
     # Open the supplied input image
+
     if in_data is not None:
 
         net_integerized = net_integerized.to(dtype=torch.float64)

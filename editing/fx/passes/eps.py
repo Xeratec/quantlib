@@ -43,33 +43,33 @@ import operator
 __all__ = ['AnnotateEpsPass',
            'extract_eps']
 
-def eps_conversion_pact_linears(m : nn.Module, eps_in : torch.Tensor):
+def eps_conversion_pact_linears(m : nn.Module, eps_in : torch.Tensor, **kwargs):
     ret = m.get_eps_out(eps_in).type_as(eps_in)
     return ret
 
 
-def eps_conversion_pact_acts(m : nn.Module, eps_in : torch.Tensor):
+def eps_conversion_pact_acts(m : nn.Module, eps_in : torch.Tensor, **kwargs):
     return m.get_eps().type_as(eps_in)
 
 def eps_conversion_invalid(m : nn.Module, *eps_in : torch.Tensor, **kw_eps_in : torch.Tensor):
     assert False, f"Module class: {type(m)} does not have a valid epsilon conversion!"
 
-def eps_conversion_pact_gelu(m : nn.Module, eps_in : torch.Tensor):
+def eps_conversion_pact_gelu(m : nn.Module, eps_in : torch.Tensor, **kwargs):
     return m.get_eps_out(eps_in).type_as(eps_in)
 
-def eps_conversion_pact_matmul(m : nn.Module, *eps_ins):
+def eps_conversion_pact_matmul(m : nn.Module, *eps_ins, **kwargs):
     return eps_ins[0] * eps_ins[1].type_as(eps_ins[0])
 
-def eps_conversion_matmul(m : nn.Module, *eps_ins):
+def eps_conversion_matmul(m : nn.Module, *eps_ins, **kwargs):
     return eps_ins[0] * eps_ins[1].type_as(eps_ins[0])
 
-def eps_conversion_pact_softmax(m : nn.Module, eps_in : torch.Tensor):
+def eps_conversion_pact_softmax(m : nn.Module, eps_in : torch.Tensor, **kwargs):
     return torch.Tensor((1./(m.n_levels-1.),)).type_as(eps_in)
 
-def eps_conversion_pact_layernorm(m : nn.Module, eps_in : torch.Tensor):
+def eps_conversion_pact_layernorm(m : nn.Module, eps_in : torch.Tensor, **kwargs):
     return m.get_eps_out(eps_in).type_as(eps_in)
 
-def eps_conversion_identity(m : nn.Module, *eps_ins):
+def eps_conversion_identity(m : nn.Module, *eps_ins, **kwargs):
     return eps_ins[0]
 
 def eps_conversion_truediv(m : nn.Module, *eps_ins, **kwargs):
@@ -84,19 +84,16 @@ def eps_conversion_pact_constwrap(m : nn.Module, *eps_ins, **kwargs):
 def eps_conversion_pact_integeradd(m : nn.Module, *eps_ins, **kwargs):
     return m.act_out.get_eps().type_as(eps_ins[0])
 
-def eps_conversion_pact_integerconcat(m : nn.Module, *eps_ins, **kwargs):
-    return m.acts[0].get_eps().type_as(eps_ins[0])
-
-def eps_conversion_embedding(m : nn.Module, eps_in : torch.Tensor):
+def eps_conversion_embedding(m : nn.Module, eps_in : torch.Tensor, **kwargs):
     return m.adder.act_out.get_eps().type_as(eps_in)
 
-def eps_conversion_PACTWrapModule(m : nn.Module, *eps_in):
+def eps_conversion_PACTWrapModule(m : nn.Module, *eps_in, **kwargs):
     return m.statTracker.get_eps()
 
-def eps_conversion_mul(m : nn.Module, *eps_in):
+def eps_conversion_mul(m : nn.Module, *eps_in, **kwargs):
     return eps_in[0] * eps_in[1].type_as(eps_in[0])
 
-def eps_conversion_first_in(m : nn.Module, *eps_in):
+def eps_conversion_first_in(m : nn.Module, *eps_in, **kwargs):
     if len(eps_in) > 0:
         return eps_in[0]
     return eps_in
@@ -147,7 +144,7 @@ _EPS_CONVERSIONS = {
     PACTLinear : eps_conversion_pact_linears,
 
     PACTIntegerAdd : eps_conversion_pact_integeradd,
-    PACTIntegerConcat : eps_conversion_pact_integerconcat,
+    PACTIntegerConcat : eps_conversion_pact_integeradd,
     PACTIntegerGELU : eps_conversion_pact_gelu,
     PACTIntegerITAMax: eps_conversion_pact_softmax,
     PACTIntegerITAPartialMax: eps_conversion_pact_softmax,
@@ -303,9 +300,13 @@ class QuantInfo:
     signed_out : bool
 
 class AnnotateEpsPass(FxPass):
-    def __init__(self, eps_in : Optional[Union[torch.Tensor, float]], n_levels_in : Optional[int] = 256, accumulator_levels : int = 2**32, signed_in : bool = True, prop_eps : bool = True, prop_n_levels : bool = True, prop_sign : bool = True, verbose=False):
+    def __init__(self, eps_in : Optional[Union[torch.Tensor, float]], n_levels_in : Optional[int] = 256, accumulator_levels : int = 2**32, signed_in : bool = True, prop_eps : bool = True, prop_n_levels : bool = True, prop_sign : bool = True, verbose=False, eps_prop_funcs = _EPS_CONVERSIONS, n_levels_prop_funcs = _N_LEVELS_OUT_PROP, signed_prop_funcs = _SIGNED_OUT_PROP):
         super(AnnotateEpsPass, self).__init__()
         self.verbose = verbose
+
+        self._EPS_CONVERSIONS = eps_prop_funcs
+        self._N_LEVELS_OUT_PROP = n_levels_prop_funcs
+        self._SIGNED_OUT_PROP = signed_prop_funcs
 
         if isinstance(eps_in, Iterable):
             try:
@@ -390,7 +391,7 @@ class AnnotateEpsPass(FxPass):
                         conversion_args = [None] + arg_eps_ins
 
                     try:
-                        eps_out = _EPS_CONVERSIONS[k](*conversion_args, **conversion_kwargs)
+                        eps_out = self._EPS_CONVERSIONS[k](*conversion_args, **conversion_kwargs)
                     except KeyError:
                         if (self.verbose):
                             print(f"[AnnotateEpsPass] Key {k} not found in _EPS_CONVERSIONS!")
@@ -410,7 +411,7 @@ class AnnotateEpsPass(FxPass):
                     else:
                         node_in_levels = [i.meta['quant'].n_levels_out for i in node.args if isinstance(i, fx.Node)]
                     try:
-                        node_out_levels = _N_LEVELS_OUT_PROP[k](m, node_in_levels, self.accumulator_levels)
+                        node_out_levels = self._N_LEVELS_OUT_PROP[k](m, node_in_levels, self.accumulator_levels)
                     except KeyError:
                         if (self.verbose):
                             print(f"[AnnotateEpsPass] Key {k} not found in _N_LEVELS_OUT_PROP!")
@@ -430,7 +431,7 @@ class AnnotateEpsPass(FxPass):
                     else:
                         node_in_signed = [i.meta['quant'].signed_out for i in node.args if isinstance(i, fx.Node)]
                     try:
-                        node_out_signed = _SIGNED_OUT_PROP[k](m, node_in_signed)
+                        node_out_signed = self._SIGNED_OUT_PROP[k](m, node_in_signed)
                     except KeyError:
                         if (self.verbose):
                             print(f"[AnnotateEpsPass] Key {k} not found in _SIGNED_OUT_PROP!")
