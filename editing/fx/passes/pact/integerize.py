@@ -1,9 +1,10 @@
 #
-# general.py
+# integerize.py
 #
 # Author(s):
 # Georg Rutishauser <georgr@iis.ee.ethz.ch>
 # Moritz Scherer <scheremo@iis.ee.ethz.ch>
+# Victor Jung <jungvi@iis.ee.ethz.ch>
 #
 # Copyright (c) 2020-2021 ETH Zurich.
 #
@@ -20,29 +21,23 @@
 # limitations under the License.
 #
 
-from typing import Union, Optional, Tuple, List, Literal
-from dataclasses import dataclass
+from typing import Union, Optional, Literal
 from functools import partial
 from copy import deepcopy
-
 import numpy as np
-
 import torch
 from torch import fx, nn
 from torch.fx.subgraph_rewriter import Match
 
 from quantlib.algorithms.pact.pact_ops import *
-
-from .. import FxPass, ReplaceSequentialPatternPass, ModifySequentialPatternPass, SequentialPass, ShapePropPass, ModularizePass
+from quantlib.algorithms.pact.pact_ops import RequantShift, HardActRequantShift, ChannelwiseThreshold
+from .harmonize import InsertBNBetweenBiasedConvAndActsPass, RQSMergePass
+from .pact_util import PACTTracer, PACT_symbolic_trace
+from ...util import gm_modules, module_of_node, get_ordered_active_nodes
+from .. import FxPass, ReplaceSequentialPatternPass, SequentialPass, ShapePropPass, ModularizePass
 from .. import AnnotateEpsPass, extract_eps
 from .. import MergeConvBNPass, RetracePass
-from .harmonize import LayerNormDisassemblePass, ApplyPassToWrapModule, InsertBNBetweenBiasedConvAndActsPass, RQSMergePass
-from ...util import gm_modules, module_of_node, get_ordered_active_nodes
-from ...util.tracing import LeafTracer, custom_symbolic_trace
 
-from quantlib.algorithms.pact.pact_ops import RequantShift, HardActRequantShift, ChannelwiseThreshold
-
-from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACTTracer, PACT_symbolic_trace
 
 __all__ = ['IntegerizePACTConvPass',
            'IntegerizePACTLinearPass',
@@ -554,18 +549,18 @@ def conv_bn_act_to_conv_threshold_fun(gm : fx.GraphModule, match : Match, cutie_
 
 
 class TernarizeConvBNActPass(SequentialPass):
-    def __init__(self):
+    def __init__(self, symbolic_trace: callable = PACT_symbolic_trace):
         passes = []
         # integerize Conv layers and replace all combinations of BN + PACT activation with Threshold layers
         for conv_name, conv_type in [('CONV1D', nn.Conv1d), ('CONV2D', nn.Conv2d)]:
             for act_name, act_type in [("UNSIGNED_ACT", PACTUnsignedAct), ("SIGNED_ACT", PACTAsymmetricAct)]:
                 for bn_name, bn_type in [("BN1D", nn.BatchNorm1d), ("BN2D", nn.BatchNorm2d)]:
                     pattern = nn.Sequential(conv_type(1,1,1), bn_type(1), act_type(n_levels=256, init_clip='max', learn_clip=False, act_kind='identity'))
-                    passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, ternarize_conv_bn_act_fun, f"_{bn_name}_{act_name}_TO_THRESHOLD_PASS"))
+                    passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, ternarize_conv_bn_act_fun, f"_{bn_name}_{act_name}_TO_THRESHOLD_PASS"))
 
             #also replace "freestanding" activations AFTER replacing the BN+Act stacks
             pattern = nn.Sequential(conv_type(1,1,1), act_type(n_levels=256, init_clip='max', learn_clip=False, act_kind='identity'))
-            passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, ternarize_conv_bn_act_fun, f"_{act_name}_TO_THRESHOLD_PASS"))
+            passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, ternarize_conv_bn_act_fun, f"_{act_name}_TO_THRESHOLD_PASS"))
 
         super(TernarizeConvBNActPass, self).__init__(*passes, name_prefix="_BN_ACT_TO_THRESHOLD_PASS")
 
@@ -866,7 +861,7 @@ class IntegerizePACTNetPass(SequentialPass):
         if ternarize:
         # Look for Conv-BN-Acts, integerize the Conv and and replace the BN-Act
         # with Threshold layers
-            passes.append(TernarizeConvBNActPass())
+            passes.append(TernarizeConvBNActPass(symbolic_trace=symbolic_trace))
         else:
         # simply integerize PACTConvs' convolutional weights
             passes.append(IntegerizePACTConvPass(symbolic_trace=symbolic_trace))

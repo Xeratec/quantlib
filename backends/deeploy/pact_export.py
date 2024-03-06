@@ -20,6 +20,8 @@
 # limitations under the License.
 #
 
+from packaging.version import Version
+from typing import Tuple, Union
 from functools import partial
 from pathlib import Path
 import numpy as np
@@ -28,6 +30,7 @@ import torch
 from torch import nn
 
 import onnx
+import onnxruntime
 
 import quantlib.editing.fx as qlfx
 from quantlib.editing.lightweight import LightweightGraph
@@ -149,7 +152,7 @@ def export_net(net: nn.Module,
                name: str,
                out_dir: str,
                eps_in: float,
-               in_data: torch.Tensor,
+               in_data: Union[torch.Tensor, Tuple[torch.Tensor, ...]],
                integerize: bool = True,
                n_levels_in=256,
                D: float = 2**24,
@@ -254,6 +257,10 @@ def export_net(net: nn.Module,
         enable_skip_layer_norm=False,
         enable_bias_gelu=False,
     )
+
+    if Version(onnxruntime.__version__) >= Version("1.17"):
+        optimization_config.enable_rotary_embeddings = False
+
     optimizer = optimize_model(str(onnx_path), optimization_options=optimization_config)
     optimizer.save_model_to_file(str(onnx_path))
 

@@ -1435,7 +1435,7 @@ class PACTIntegerHardswish(nn.Module):
 
         @staticmethod
         def forward(ctx, x, three, six, one_over_six):
-            z = 0#torch.zeros_like(x).type_as(x)
+            z = 0
             inp = x
             x = x + three
             x = torch.clip(x, z, six)
@@ -3139,18 +3139,11 @@ class PACTIntegerDiv(nn.Module):
         self.integer_node = integer_node
 
     def forward(self,x,y):
-        # SCHEREMO: Shortcut degenerate cases (y == 1, eps == 0)
-        # y = torch.Tensor((y,))
-        # if torch.prod((y == torch.ones_like(y)) * (self.eps == torch.zeros_like(self.eps))) == 1.:
-        #     if self.Delta == 1:
-        #         return x
-        #     return x * self.Delta
 
         if not isinstance(y, torch.Tensor):
             raise Exception("IntegerDiv trying to divide by const!")
 
         if self.integer_node:
-
             return self.MyIntegerDiv.apply(x,y,int(self.Delta.item()),int(self.eps.item()), int(self.eta.item()))
         else:
             return self.MyIntegerDiv.forward(None, x,y,self.Delta,self.eps, self.eta)
