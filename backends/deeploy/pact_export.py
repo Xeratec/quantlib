@@ -233,17 +233,29 @@ def export_net(net: nn.Module,
     else:
         # # For pytorch >= 1.13 preserves the original scope names with some changes
         # # Replace "/" characters
+        def replace_name(name: str):
+            return name.replace("/", "_").replace("onnx::", "").replace(":", "_")
+
         for n in onnxModel.graph.node:
-            n.name = n.name.replace("/", "_")
+            n.name = replace_name(n.name)
 
             for i, name in enumerate(n.input):
-                n.input[i] = name.replace("/", "_")
+                n.input[i] = replace_name(name)
 
             for i, name in enumerate(n.output):
-                n.output[i] = name.replace("/", "_")
+                n.output[i] = replace_name(name)
+
+        for i, inp in enumerate(onnxModel.graph.input):
+            onnxModel.graph.input[i].name = replace_name(inp.name)
+
+        for i, outp in enumerate(onnxModel.graph.output):
+            onnxModel.graph.output[i].name = replace_name(outp.name)
 
         for i, info in enumerate(onnxModel.graph.value_info):
-            onnxModel.graph.value_info[i].name = info.name.replace("/", "_")
+            onnxModel.graph.value_info[i].name = replace_name(info.name)
+
+        for i, init in enumerate(onnxModel.graph.initializer):
+            onnxModel.graph.initializer[i].name = replace_name(init.name)
 
 
     # Replace custom nodes with standard ones for optimization

@@ -759,6 +759,8 @@ class PACTIntegerAddMask(PACTIntegerAdd):
         for i in self.acts:
             i.clip_lo.data.copy_(self.acts[0].clip_lo.data)
             i.clip_hi.data.copy_(self.acts[0].clip_hi.data)
+
+
 class PACTIntegerMatmul(torch.nn.Module):
     def __init__(
             self,
