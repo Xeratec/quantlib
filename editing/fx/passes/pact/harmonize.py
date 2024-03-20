@@ -591,7 +591,7 @@ def wrap_module_fun(node, n_levels, quantize, **actArgs):
     return returnNode, node.args, node.kwargs
 
 class WrapModulePass(ModularizePass):
-    def __init__(self, wrapClass, wrapClassCallable, name = '', n_levels=256, quantize = False, **kwargs):
+    def __init__(self, wrapClassCallable, name = '', n_levels=256, quantize = False, **kwargs):
         self.kwargs = kwargs
         pattern = [wrapClassCallable()]
         super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(wrap_module_fun, n_levels=n_levels, **self.kwargs, quantize=quantize), name="WRAP_REPLACEMENT_PASS")

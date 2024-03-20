@@ -121,17 +121,17 @@ class RequantShift(nn.Module):
 
             if not signed:
             # if unsigned: clip y to interval (0, n_levels-1)
-                y_tilde =  torch.clip(y, min=torch.zeros(1).type_as(x), max=(n_levels_out-1).type_as(x))
+                y_tilde =  torch.clip(y, min=torch.zeros(1), max=(n_levels_out-1))
                 return y_tilde
             else:
             # if signed: clip y to interval (-n_levels/2, n_levels/2-1)
-                c = torch.round(n_levels_out/2. + 0.001)
+                c = torch.round(n_levels_out/2. + 0.001).type_as(y)
                 # to get correct operators in the exported graph, type_as(x)
                 # must be the last thing called on a tensor before feeding into
                 # the clip operator. Otherwise, it may get exported as
                 # min(max(..)) or some other weirdness
-                lo = (c * -1).type_as(y)
-                hi = (c-1).type_as(y)
+                lo = (c * -1)
+                hi = (c-1)
 
                 y_tilde = torch.clip(y, min=lo, max=hi)
                 return y_tilde
@@ -139,7 +139,7 @@ class RequantShift(nn.Module):
         @staticmethod
         @parse_args('v', 'v', 'v', 't', 't', 't', 't')
         def symbolic(g, x, mul, add, div, signed, n_levels_out, cmsis_requant):
-            signed = torch.Tensor((signed,)).type_as(div)
+            signed = torch.Tensor((signed,))
             div_ = g.op("Constant", value_t=div)
             signed_ = g.op("Constant", value_t=signed)
             n_levels_out_ = g.op("Constant", value_t=n_levels_out)
@@ -174,13 +174,13 @@ class RequantShift(nn.Module):
         if len(self.add.shape) == 1:
             add = self.add.reshape([-1]+[1]*(len(x.shape)-2))
 
-        if torch.equal(mul.type_as(x), self.div.type_as(x)) and torch.equal(add.type_as(x), torch.Tensor((0.,)).type_as(x)):
-            return x
+        # if torch.equal(mul.type_as(x), self.div.type_as(x)) and torch.equal(add.type_as(x), torch.Tensor((0.,)).type_as(x)):
+        #     return x
         if self.requant_node:
-            return self.MyRequantShift.apply(x, mul.type_as(x), add.type_as(x), self.div.type_as(x), self.signed, self.n_levels_out.type_as(x), self.cmsis_requant)
+            return self.MyRequantShift.apply(x, mul, add, self.div, self.signed, self.n_levels_out, self.cmsis_requant)
         else:
             # calling `forward` directly does not trigger the symbolic export
-            return self.MyRequantShift.forward(None, x, mul.type_as(x), add.type_as(x), self.div.type_as(x), self.signed, self.n_levels_out, self.cmsis_requant)
+            return self.MyRequantShift.forward(None, x, mul, add, self.div, self.signed, self.n_levels_out, self.cmsis_requant)
 
 class HardActRequantShift(nn.Module):
     #def __init__(self, gamma_h : torch.Tensor, beta_h : torch.Tensor, three :
@@ -1439,7 +1439,7 @@ class PACTHardswish(nn.Module):
         x = x + three
         x = torch.minimum(torch.maximum(z, x), six)
         # 2. /6
-        one_over_six = PACTQuantize(o/6, self.eps_s, 0., 1., floor=False)
+        one_over_six = PACTQuantize(o/6, self.eps_s.type_as(o), 0., 1., floor=False)
         x = x * one_over_six
         # 3. x * (ans)
         return inp * x
@@ -2539,9 +2539,9 @@ class PACTIntegerRMSNorm(torch.nn.Module):
 
     def forward(self, x):
         if self.export_node:
-            return self.MyRMSNorm.apply(x, self.weight.type_as(x), int(self.D.item()), int(self.n_levels.item()))
+            return self.MyRMSNorm.apply(x, self.weight, int(self.D.item()), int(self.n_levels.item()))
         else:
-            return self.MyRMSNorm.forward(None, x, self.weight.type_as(x), self.D.type_as(x), self.n_levels.type_as(x))
+            return self.MyRMSNorm.forward(None, x, self.weight, self.D, self.n_levels)
 
 class PACTRMSNorm(_PACTEps, _PACTLinOp):
 
