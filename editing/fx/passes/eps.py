@@ -144,6 +144,7 @@ _EPS_CONVERSIONS = {
     PACTLinear : eps_conversion_pact_linears,
 
     PACTIntegerAdd : eps_conversion_pact_integeradd,
+    PACTIntegerAddMask : eps_conversion_pact_integeradd,
     PACTIntegerConcat : eps_conversion_pact_integeradd,
     PACTIntegerGELU : eps_conversion_pact_gelu,
     PACTIntegerITAMax: eps_conversion_pact_softmax,
@@ -241,7 +242,7 @@ _SIGNED_OUT_PROP = {
     '_CALL_METHOD_reshape' : signed_out_first_in,
     '_CALL_METHOD_transpose' : signed_out_first_in,
     '_CALL_METHOD_view' : signed_out_first_in,
-    
+
     f'_CALL_FUNCTION_{repr(getattr)}' : signed_out_first_in,
     f'_CALL_FUNCTION_{repr(operator.add)}' : signed_out_or_in_signed,
     f'_CALL_FUNCTION_{repr(operator.getitem)}' : signed_out_first_in,
@@ -282,6 +283,7 @@ _SIGNED_OUT_PROP = {
     PACTLayerNorm: always_signed,
 
     PACTIntegerAdd : signed_out_or_in_signed,
+    PACTIntegerAddMask : signed_out_or_in_signed,
     PACTIntegerGELU : always_signed,
     PACTIntegerITAMax: always_unsigned,
     PACTIntegerITAPartialMax: always_unsigned,
@@ -339,11 +341,11 @@ class AnnotateEpsPass(FxPass):
     @staticmethod
     def _get_parents_eps_out(node: fx.node.Node) -> List:
         return [i.meta['quant'].eps_out[0] for i in node.args[0]]
-    
+
     @staticmethod
     def _get_parents_n_levels_out(node: fx.node.Node) -> List:
         return [i.meta['quant'].n_levels_out for i in node.args[0]]
-    
+
     @staticmethod
     def _get_parents_signed_out(node: fx.node.Node) -> List:
         return [inp.meta['quant'].signed_out for inp in node.args[0]]

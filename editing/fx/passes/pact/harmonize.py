@@ -596,6 +596,16 @@ class WrapModulePass(ModularizePass):
         pattern = [wrapClassCallable()]
         super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(wrap_module_fun, n_levels=n_levels, **self.kwargs, quantize=quantize), name="WRAP_REPLACEMENT_PASS")
 
+def replace_module_fun(node, module_class, **actArgs):
+    returnNode = module_class(**actArgs)
+    return returnNode, node.args, node.kwargs
+
+class ReplaceModulePass(ModularizePass):
+    def __init__(self, wrapClassCallable, module_class, name = '', n_levels=256, **kwargs):
+        self.kwargs = kwargs
+        pattern = [wrapClassCallable()]
+        super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(replace_module_fun,  module_class=module_class, **self.kwargs), name="WRAP_REPLACEMENT_PASS")
+
 # def unwrap_module_fun(gm : fx.GraphModule, match : Match, wrapClass = None):
 
 #     print("Found match!")
@@ -916,7 +926,7 @@ class HomogeneousFakeQuantReluPass(SequentialPass):
         passes.append(ReplaceSequentialPatternPass(nn.Sequential(nn.ReLU6()),
                                                             symbolic_trace,
                                                             lambda x,y : PACTUnsignedAct(**pactActConfig),
-                                                            f'PACTIFIED_RELU6'))        
+                                                            f'PACTIFIED_RELU6'))
         super().__init__(*passes, name_prefix='')
 
 class HomogeneousFakeQuantPass(SequentialPass):

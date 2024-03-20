@@ -61,6 +61,7 @@ __all__ = [
     'PACTQuantize',
     'TQTQuantize',
     'PACTIntegerAdd',
+    'PACTIntegerAddMask',
     'PACTIntegerConcat',
     'PACTIntegerMatmul',
     'PACTIntegerSoftmax',
@@ -733,7 +734,25 @@ class PACTIntegerAdd(torch.nn.Module):
                 total.eps = self.acts[0].get_eps()
         return total
 
+class PACTIntegerAddMask(PACTIntegerAdd):
+    def __init__(
+            self,
+            num_args = 1,
+            force_out_eps=False,
+            signed : Union[bool, list] = True,
+            n_levels : Union[int, list] = 256,
+            **kwargs
+    ):
+        super().__init__(num_args, force_out_eps, signed, n_levels, **kwargs)
 
+    def reassign_epsilons(self):
+        # Alays use the episolon from the first activation
+        self.act_out.clip_lo.data.copy_(self.acts[0].clip_lo.data)
+        self.act_out.clip_hi.data.copy_(self.acts[0].clip_hi.data)
+
+        for i in self.acts:
+            i.clip_lo.data.copy_(self.acts[0].clip_lo.data)
+            i.clip_hi.data.copy_(self.acts[0].clip_hi.data)
 class PACTIntegerMatmul(torch.nn.Module):
     def __init__(
             self,
