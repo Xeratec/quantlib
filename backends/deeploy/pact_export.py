@@ -118,6 +118,9 @@ def save_beautiful_text(t: np.ndarray, layer_name: str, filepath: str):
     with open(str(filepath), 'w') as fp:
         fp.write(f"# {layer_name} (shape {list(t.shape)}),\n")
 
+        if t.ndim > 4:
+            t = t.reshape(t.shape[0], t.shape[1], t.shape[2], -1)
+
         if t.ndim == 3:
             t = t.reshape(1, t.shape[0], t.shape[1], t.shape[2])
         elif t.ndim == 2:
@@ -367,7 +370,7 @@ def export_net(net: nn.Module,
 
         out_path.joinpath("activations/").mkdir(parents=True, exist_ok=True)
 
-        for idx, array in enumerate(output_np):
+        for idx, array in enumerate(input_np):
             save_beautiful_text(array, f"input_{idx}", out_path.joinpath(f"activations/input_{idx}.txt"))
         for idx, array in enumerate(output_np):
             save_beautiful_text(array, f"output_{idx}", out_path.joinpath(f"activations/output_{idx}.txt"))

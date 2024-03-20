@@ -88,7 +88,10 @@ def eps_conversion_embedding(m : nn.Module, eps_in : torch.Tensor):
     return m.adder.act_out.get_eps().type_as(eps_in)
 
 def eps_conversion_PACTWrapModule(m : nn.Module, *eps_in):
-    return m.statTracker.get_eps()
+    if m.quantize:
+        return m.statTracker.get_eps()
+    else:
+        return eps_in[0]
 
 def eps_conversion_mul(m : nn.Module, *eps_in):
     return eps_in[0] * eps_in[1].type_as(eps_in[0])
@@ -223,7 +226,7 @@ always_signed = lambda m, si: True
 always_unsigned = lambda m, si: False
 
 def signed_out_pact_wrap(m : nn.Module, si : list):
-    return _SIGNED_OUT_PROP[type(m.Module)](m.module, si)
+    return _SIGNED_OUT_PROP[type(m.module)](m.module, si)
 
 def signed_out_or_in_signed(m : nn.Module, si : list):
     out_signed = False

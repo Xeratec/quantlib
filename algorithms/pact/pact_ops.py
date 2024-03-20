@@ -438,6 +438,9 @@ class _PACTActivation(nn.Module):
             return newHistogram
 
         with torch.no_grad():
+            # Get stat without infinities
+            stat = stat[torch.isfinite(stat)]
+
             # SCHEREMO: get min and max
             newTruemax = max(self.truemax.item(), stat.max())
             newTruemin = min(self.truemin.item(), stat.min())
@@ -481,6 +484,9 @@ class _PACTActivation(nn.Module):
         return r
 
     def forward(self, x):
+        if x.numel() == 0:
+            return x
+
         if not self.started:
             if self.act_kind == 'identity':
                 res =  x
@@ -606,7 +612,7 @@ class PACTIntegerConcat(torch.nn.Module):
                     max_clip = i.clip_hi.data
                     min_clip = i.clip_lo.data
                     diff = max_clip - min_clip
-                    eps = diff/(self.n_levels_in-1)
+                    eps = diff/(self.n_levels-1)
 
         else:
             clip_hi = self.act_out.clip_hi.data.detach().clone()
