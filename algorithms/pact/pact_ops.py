@@ -445,8 +445,7 @@ class _PACTActivation(nn.Module):
             stat = stat[stat > (torch.finfo(stat.dtype).min )]
             stat = stat[stat < (torch.finfo(stat.dtype).max)]
 
-            if stat.numel() == 0:
-                return
+
             # SCHEREMO: get min and max
             newTruemax = max(self.truemax.item(), stat.max())
             newTruemin = min(self.truemin.item(), stat.min())
@@ -1782,13 +1781,15 @@ class PACTSoftmax(_PACTEps):
                 x = torch.floor(x/eps+0.5)*eps
             return x
 
+        rqx = RQ(torch.max(x, -1, keepdim=True)[0], self.eps_in)
         x[x <= (torch.finfo(x.dtype).min + torch.finfo(x.dtype).eps)] = torch.nan
         # return torch.zeros_like(x)
 
-        xTilde = x - RQ(torch.max(x, -1, keepdim=True)[0], self.eps_in)
+        xTilde = x - rqx
         z = -RQ(xTilde / self.log2, torch.Tensor((1.,)).type_as(x))
         p = xTilde + z * self.log2
         y = RQ((self.coeffA*(p + self.coeffB)**2 + self.coeffC) / 2**z, self.coeffA*self.eps_in**2)
+        y[y.isnan()] = 0
         ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
         out = RQ(y / (ysum), 1./self.n_levels)
         out[out.isnan()] = 0
@@ -1803,16 +1804,17 @@ class PACTIntegerSoftmax(torch.nn.Module):
         def forward(ctx, x, log2, coeffA, coeffB, coeffC, n_levels, zero):
             # return torch.zeros_like(x)
 
+            rqx = torch.max(x, -1, keepdim=True)[0]
             x[x <= (torch.finfo(x.dtype).min + torch.finfo(x.dtype).eps)] = torch.nan
 
-            xTilde = (x - torch.max(x, dim = -1, keepdim = True)[0])
+            xTilde = x - rqx
             z = torch.floor(-xTilde / log2)
             p = xTilde + z * log2
             y = torch.floor(((coeffA * (p + coeffB)**2 + coeffC)) // (2**z))
+            y[y.isnan()] = 0
             ysum = torch.sum(y, -1, keepdim = True)
             norm = torch.floor(y * (n_levels - 1) / (ysum))
             out = torch.clip(norm, zero, n_levels - 1)
-
             out[out.isnan()] = 0
 
             return out
