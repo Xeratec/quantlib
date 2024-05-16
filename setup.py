@@ -33,6 +33,8 @@ setup(name='quantlib',
           'torch',
           'networkx',
           'graphviz',
+          'onnx',
+          'scipy',
       ],
      )
 

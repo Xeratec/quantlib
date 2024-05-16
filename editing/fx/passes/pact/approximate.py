@@ -37,18 +37,31 @@ from ...util import gm_modules
 from .pact_util import PACT_symbolic_trace, PACT_symbolic_trace_inclusive
 
 
-def replSoftmax(gm : fx.GraphModule, match : Match, mode: str):
+def replSoftmax(gm : fx.GraphModule, match : Match, mode: str, act_cfg: dict, **kwargs):
+
+
+    default_act_kwargs = {
+        'learn_clip' : True,
+        'tqt' : True,
+        'init_clip' :'max',
+        'act_kind' : 'identity',
+    }
+    default_act_kwargs.update(act_cfg)
+
     if mode == "I-BERT":
-        replacement_class = PACTSoftmax()
-    elif mode=='ITA':
-        replacement_class = PACTITAMax()
-    elif mode=='ITA-Partial':
-        replacement_class = PACTITAPartialMax()
+        # Insert unsigned activation before softmax
+        replacement_class = nn.Sequential(PACTAsymmetricAct(**default_act_kwargs), PACTSoftmax(**kwargs))
+    else:
+        cfg = {**default_act_kwargs, **kwargs}
+
+        if mode=='ITA':
+            replacement_class = PACTITAMax(**cfg)
+        elif mode=='ITA-Partial':
+            replacement_class = PACTITAPartialMax(**cfg)
 
     return replacement_class
 
 class ApproximateSoftmaxPass(SequentialPass):
-
     modes = ["I-BERT", "ITA", 'ITA-Partial']
 
     def __init__(self, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace, mode: Literal["I-BERT", "ITA", 'ITA-Partial'] = "I-BERT", **kwargs):

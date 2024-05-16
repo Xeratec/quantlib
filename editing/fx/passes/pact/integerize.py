@@ -47,8 +47,14 @@ __all__ = ['IntegerizePACTConvPass',
            'IntegerizeGELUPass',
            'IntegerizeLayerNormPass',
            'IntegerizeEmbeddingsPass',
+           'IntegerizeTrueDivPass',
+           'IntegerizeMeanPass',
+           'IntegerizeConstWrapPass',
+           'TernarizeConvBNActPass',
+           'SwapMaxPoolActPass',
            'FixChannelNumbersPass',
            'IntegerizeBNPACTHardActsPass',
+           'ReplacePACTCausalConv1DPass',
            'PACTTracer',
            'PACT_symbolic_trace',]
 
@@ -200,6 +206,7 @@ class IntegerizeSoftmaxPass(SequentialPass):
         passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, partial(integerize_softmax_fun, mode='ITA', D=D, export_node=export_softmax_node), f'_INTEGER_SOFTMAX_PASS'))
 
         pattern = nn.Sequential(PACTITAPartialMax())
+        # WIESEP: D should be small enough to cause mult of the RQS node to be in range of int8
         passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, partial(integerize_softmax_fun, mode='ITA-Partial', D=D, export_node=export_softmax_node), f'_INTEGER_SOFTMAX_PASS'))
         super().__init__(*passes, name_prefix='_INTEGER_SOFTMAX_PASS')
 
@@ -270,20 +277,13 @@ def integerize_pact_linear_fun(gm : fx.GraphModule, match : Match):
     #import IPython; IPython.embed()
     new_lin = nn.Linear(in_features=lin.in_features,
                         out_features=lin.out_features,
-                        #bias=(lin.bias is not None))
-                        bias=True)
-
+                        bias=(lin.bias is not None))
     new_lin.weight.data.copy_(lin.weight_int.round())
     if lin.bias is not None:
         new_bias = lin.get_bias_int(eps_in).round()
         if len(new_bias.shape) == 2:
             new_bias = torch.diagonal(new_bias,0,dim1=-2, dim2=-1)
         new_lin.bias.data.copy_(new_bias)
-    else:
-        # this is done to avoid the inference of "MatMul" nodes during export.
-        # Those nodes do not preserve weight names and our annotation does not
-        # work for them.
-        new_lin.bias.data.zero_()
 
 
     new_lin.n_levels = lin.n_levels
