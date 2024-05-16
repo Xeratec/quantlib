@@ -120,11 +120,11 @@ class RequantShift(nn.Module):
                 y = torch.floor((y / div) + 0.5)
 
             if not signed:
-            # if unsigned: clip y to interval (0, n_levels-1)
+                # if unsigned: clip y to interval (0, n_levels-1)
                 y_tilde =  torch.clip(y, min=torch.zeros(1), max=(n_levels_out-1))
                 return y_tilde
             else:
-            # if signed: clip y to interval (-n_levels/2, n_levels/2-1)
+                # if signed: clip y to interval (-n_levels/2, n_levels/2-1)
                 c = torch.round(n_levels_out/2. + 0.001).type_as(y)
                 # to get correct operators in the exported graph, type_as(x)
                 # must be the last thing called on a tensor before feeding into
@@ -182,6 +182,8 @@ class RequantShift(nn.Module):
             # calling `forward` directly does not trigger the symbolic export
             return self.MyRequantShift.forward(None, x, mul, add, self.div, self.signed, self.n_levels_out, self.cmsis_requant)
 
+    def __repr__(self):
+        return f"RequantShift(mul={self.mul}, add={self.add}, div={self.div}, signed={self.signed}, n_levels_out={self.n_levels_out}, cmsis_requant={self.cmsis_requant})"
 class HardActRequantShift(nn.Module):
     #def __init__(self, gamma_h : torch.Tensor, beta_h : torch.Tensor, three :
     #torch.Tensor, six : torch.Tensor, one_over_six : torch.Tensor, D1 : float,
@@ -440,7 +442,11 @@ class _PACTActivation(nn.Module):
         with torch.no_grad():
             # Get stat without infinities
             stat = stat[torch.isfinite(stat)]
+            stat = stat[stat > (torch.finfo(stat.dtype).min )]
+            stat = stat[stat < (torch.finfo(stat.dtype).max)]
 
+            if stat.numel() == 0:
+                return
             # SCHEREMO: get min and max
             newTruemax = max(self.truemax.item(), stat.max())
             newTruemin = min(self.truemin.item(), stat.min())
@@ -484,8 +490,8 @@ class _PACTActivation(nn.Module):
         return r
 
     def forward(self, x):
-        if x.numel() == 0:
-            return x
+        # if x.numel() == 0:
+        #     return x
 
         if not self.started:
             if self.act_kind == 'identity':
@@ -886,7 +892,7 @@ class _PACTLinOp:
         # This way, only the lower clip bound is
         self.clip_hi = nn.Parameter(clip_hi, requires_grad=((learn_clip and not tqt) and not symm_wts))
         # to provide convenient access for the controller to the clipping params, store them in a dict.
-        self.clipping_params = {'low':self.clip_lo, 'high':self.clip_hi}
+        self.clipping_params = {'low': self.clip_lo, 'high': self.clip_hi}
         self.tqt = tqt
 
         if self.tqt:
@@ -1662,9 +1668,9 @@ class PACTExp(torch.nn.Module):
 
         """
 
-#         clip_lo = -torch.abs(torch.max(x))
-#         clip_hi = AlmostSymmQuantFunc.apply(clip_lo, self.n_levels)
-#         eps = (clip_hi-clip_lo)/self.n_levels
+        #         clip_lo = -torch.abs(torch.max(x))
+        #         clip_hi = AlmostSymmQuantFunc.apply(clip_lo, self.n_levels)
+        #         eps = (clip_hi-clip_lo)/self.n_levels
 
         xTilde = (x - torch.max(x, -1, keepdim=True)[0])
         z = torch.floor(-xTilde / math.log(2))
@@ -1776,13 +1782,18 @@ class PACTSoftmax(_PACTEps):
                 x = torch.floor(x/eps+0.5)*eps
             return x
 
+        x[x <= (torch.finfo(x.dtype).min + torch.finfo(x.dtype).eps)] = torch.nan
+        # return torch.zeros_like(x)
+
         xTilde = x - RQ(torch.max(x, -1, keepdim=True)[0], self.eps_in)
         z = -RQ(xTilde / self.log2, torch.Tensor((1.,)).type_as(x))
         p = xTilde + z * self.log2
         y = RQ((self.coeffA*(p + self.coeffB)**2 + self.coeffC) / 2**z, self.coeffA*self.eps_in**2)
         ysum = torch.unsqueeze(torch.sum(y, -1), dim=-1)
         out = RQ(y / (ysum), 1./self.n_levels)
+        out[out.isnan()] = 0
         return out
+
 
 class PACTIntegerSoftmax(torch.nn.Module):
 
@@ -1790,13 +1801,19 @@ class PACTIntegerSoftmax(torch.nn.Module):
 
         @staticmethod
         def forward(ctx, x, log2, coeffA, coeffB, coeffC, n_levels, zero):
-            xTilde = (x - torch.max(x, dim=-1, keepdim=True)[0])
+            # return torch.zeros_like(x)
+
+            x[x <= (torch.finfo(x.dtype).min + torch.finfo(x.dtype).eps)] = torch.nan
+
+            xTilde = (x - torch.max(x, dim = -1, keepdim = True)[0])
             z = torch.floor(-xTilde / log2)
             p = xTilde + z * log2
-            y = torch.floor(((coeffA*(p + coeffB)**2 + coeffC)) // (2**z))
-            ysum = torch.sum(y, -1, keepdim=True)
-            norm = torch.floor(y*(n_levels-1)/(ysum))
-            out = torch.clip(norm, zero, n_levels-1)
+            y = torch.floor(((coeffA * (p + coeffB)**2 + coeffC)) // (2**z))
+            ysum = torch.sum(y, -1, keepdim = True)
+            norm = torch.floor(y * (n_levels - 1) / (ysum))
+            out = torch.clip(norm, zero, n_levels - 1)
+
+            out[out.isnan()] = 0
 
             return out
 
@@ -1805,15 +1822,21 @@ class PACTIntegerSoftmax(torch.nn.Module):
         def symbolic(g, x, log2, coeffA, coeffB, coeffC, n_levels, zero):
             #return g.op("PACTOps::iSoftmax", x, log2_f = log2, coeffA_f = coeffA, coeffB_f = coeffB, coeffC_f = coeffC, n_levels_f = n_levels)
 
-            log2_ = g.op("Constant", value_t=log2)
-            coeffA_ = g.op("Constant", value_t=coeffA)
-            coeffB_ = g.op("Constant", value_t=coeffB)
-            coeffC_ = g.op("Constant", value_t=coeffC)
-            n_levels_ = g.op("Constant", value_t=n_levels)
+            log2_ = g.op("Constant", value_t = log2)
+            coeffA_ = g.op("Constant", value_t = coeffA)
+            coeffB_ = g.op("Constant", value_t = coeffB)
+            coeffC_ = g.op("Constant", value_t = coeffC)
+            n_levels_ = g.op("Constant", value_t = n_levels)
 
-            return g.op("PACTOps::iSoftmax", x, log2_t=log2, coeffA_t=coeffA, coeffB_t=coeffB,  coeffC_t=coeffC, n_levels_t=n_levels)
+            return g.op("PACTOps::iSoftmax",
+                        x,
+                        log2_t = log2,
+                        coeffA_t = coeffA,
+                        coeffB_t = coeffB,
+                        coeffC_t = coeffC,
+                        n_levels_t = n_levels)
 
-    def __init__(self, n_levels: int = 256, eps_in: float = 1./255, export_node=False):
+    def __init__(self, n_levels: int = 256, eps_in: float = 1. / 255, export_node = False):
         super().__init__()
 
         self.eps_in = eps_in
@@ -1838,13 +1861,13 @@ class PACTIntegerSoftmax(torch.nn.Module):
         eps = eps
         eps2 = torch.Tensor((0.3585,))
 
-        self.coeffA.data[0] = torch.round(0.3585/eps2)
-        self.coeffB.data[0] = torch.round(1.353/eps)
-        self.coeffC.data[0] = torch.round(0.344/(eps**2*eps2))
+        self.coeffA.data[0] = torch.round(0.3585 / eps2)
+        self.coeffB.data[0] = torch.round(1.353 / eps)
+        self.coeffC.data[0] = torch.round(0.344 / (eps**2 * eps2))
 
         #self.log2.data[0] = 2**torch.round(torch.Tensor((math.log2(math.log2(2)/(eps)),)))
         #self.log2.data[0] = torch.round(torch.Tensor((math.log2(2)/(eps)),))
-        self.log2.data[0] = torch.round(math.log2(2)/(eps))
+        self.log2.data[0] = torch.round(math.log2(2) / (eps))
 
     def forward(self, x):
         """Approximate Softmax implementation according to the I-BERT paper:
@@ -1856,9 +1879,14 @@ class PACTIntegerSoftmax(torch.nn.Module):
 
         """
         if self.export_node:
-            return self.MySoftmax.apply(x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
+            return self.MySoftmax.apply(x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x),
+                                        self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
         else:
-            return self.MySoftmax.forward(None, x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x), self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
+            return self.MySoftmax.forward(None, x, self.log2.type_as(x), self.coeffA.type_as(x), self.coeffB.type_as(x),
+                                          self.coeffC.type_as(x), self.n_levels.type_as(x), self.zero.type_as(x))
+
+    def __repr__(self):
+        return f"PACTIntegerSoftmax(n_levels={self.n_levels.item()}, eps_in={self.eps_in}, coeffA={self.coeffA.item()}, coeffB={self.coeffB.item()}, coeffC={self.coeffC.item()}, log2={self.log2.item()})"
 
 class PACTITAMax(_PACTEps):
     def __init__(self,  n_levels: int = 256, **kwargs):
