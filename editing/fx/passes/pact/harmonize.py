@@ -533,6 +533,10 @@ def rqs_merge_fun(gm : fx.GraphModule, match : Match):
         add1 = rqs_1.add
         add2 = rqs_2.add
         newAdd = ((add1 * rqs_2.mul + add2 * rqs_1.div)/min(rqs_1.div, rqs_2.div)).round()
+    
+    if newMul == 0:
+        print("JUNGVI: WARNING: Mul factor of RSQ has been rounded to zero. Now setting it to 1.")
+        newMul = torch.tensor([1.])
 
     return RequantShift(newMul, newAdd, (rqs_2.n_levels_out)//(2**mixed), signed = signed, D=newD, cmsis_requant=rqs_1.cmsis_requant, requant_node=rqs_1.requant_node)
 

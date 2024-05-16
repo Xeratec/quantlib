@@ -68,7 +68,7 @@ class ApproximateSoftmaxPass(SequentialPass):
         passes = []
         pattern = nn.Sequential(nn.Softmax())
         assert mode in self.modes, f"[ApproximateSoftmaxPass] Invalid mode {mode} specified!"
-        passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, partial(replSoftmax, mode=mode), f'_APPROXIMATE_SOFTMAX_PASS'))
+        passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, partial(replSoftmax, mode=mode, **kwargs), f'_APPROXIMATE_SOFTMAX_PASS'))
         super().__init__(*passes, name_prefix='_APPROXIMATE_SOFTMAX_PASS')
 
 class ApproximateGELUPass(SequentialPass):
