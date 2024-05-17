@@ -757,7 +757,7 @@ class PACTIntegerAddMask(PACTIntegerAdd):
         super().__init__(num_args, force_out_eps, signed, n_levels, **kwargs)
 
     def reassign_epsilons(self):
-        # Alays use the episolon from the first activation
+        # Always use the epislon from the first activation
         self.act_out.clip_lo.data.copy_(self.acts[0].clip_lo.data)
         self.act_out.clip_hi.data.copy_(self.acts[0].clip_hi.data)
 
