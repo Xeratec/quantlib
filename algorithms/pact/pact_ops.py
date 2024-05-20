@@ -55,8 +55,8 @@ __all__ = [
     'PACTIntegerEmbedding', 'PACTEmbedding', 'PACTWrapModule', 'PACTWrapMHSA', 'PACTWrapLinearAttention',
     'PACTWrapCLCA', 'RequantShift', 'HardActRequantShift', 'PACTHardswish', 'PACTHardsigmoid', 'PACTIntegerHardswish',
     'PACTIntegerHardsigmoid', 'PACTMean', 'PACTIntegerMean', 'PACTDiv', 'PACTIntegerDiv', 'PACTTrueIntegerDiv',
-    'PACTExp', 'PACTIntegerExp', 'ChannelwiseThreshold'
-    'SofterMax', 'IntegerSofterMax'
+    'PACTExp', 'PACTIntegerExp', 'ChannelwiseThreshold',
+    'SofterMax', 'IntegerSofterMax',
 ]
 
 class RequantShift(nn.Module):
