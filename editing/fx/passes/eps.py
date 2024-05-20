@@ -178,6 +178,9 @@ def n_levels_out_pact_acts(m : nn.Module, in_levels : list, accumulator_levels :
 def n_levels_out_pact_embedding(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
     return m.adder.act_out.n_levels
 
+def n_levels_out_pact_addmask(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
+    return in_levels[1]
+
 
 _N_LEVELS_OUT_PROP = {
     '_CALL_METHOD_contiguous' : n_levels_out_first_in,
@@ -220,6 +223,7 @@ _N_LEVELS_OUT_PROP = {
     PACTIntegerLayerNorm: n_levels_out_pact_acts,
     PACTIntegerMatmul : n_levels_out_pact_linears,
     PACTIntegerSoftmax : n_levels_out_pact_acts,
+    PACTIntegerAddMask: n_levels_out_pact_addmask,
 }
 
 always_signed = lambda m, si: True
