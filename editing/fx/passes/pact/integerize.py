@@ -264,8 +264,8 @@ def integerize_pact_linear_fun(gm : fx.GraphModule, match : Match):
     assert isinstance(lin, PACTLinear), f"integerize_pact_linear_fun got bad match - expected PACTLinear, got {type(lin)}"
     # note the new node's intended integer precision in the precision dict
     #if prec_dict is not None:
-        #nbits = int(np.log2(lin.n_levels) + 0.2)
-        #        prec_dict[name] = nbits
+    #nbits = int(np.log2(lin.n_levels) + 0.2)
+    #        prec_dict[name] = nbits
 
     #import IPython; IPython.embed()
     new_lin = nn.Linear(in_features=lin.in_features,
@@ -368,8 +368,14 @@ class ReplacePACTCausalConv1DPass(ReplaceSequentialPatternPass):
         super(ReplacePACTCausalConv1DPass, self).__init__(pattern, symbolic_trace, replace_pact_causalconv1d_padconv1d_fun, name)
 
 
-def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24, cmsis_requant=False, requant_node=False, skip_identity_rqs=True):
+def bn_act_to_requant_fun(gm: fx.GraphModule,
+                          match: Match,
+                          D = 2**24,
+                          cmsis_requant = False,
+                          requant_node = False,
+                          skip_identity_rqs = True):
     modules = dict(gm.named_modules())
+    alpha_h = 1.5
     if not isinstance(D, torch.Tensor):
         D = torch.tensor(D)
     matched_nodes = [n for n in match.nodes_map.values()][-2:0:-1]
@@ -385,8 +391,10 @@ def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24, cmsis_req
         act_node = matched_nodes[1]
         bn = matched_modules[0]
         bn_node = matched_nodes[0]
-        assert isinstance(bn, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)), f"bn_act_to_requant called on incompatible BN layer {type(bn)}"
-    assert isinstance(act, (PACTUnsignedAct, PACTAsymmetricAct)), f"bn_act_to_requant called on incompatible activation {type(act)}"
+        assert isinstance(bn, (nn.BatchNorm1d, nn.BatchNorm2d,
+                               nn.BatchNorm3d)), f"bn_act_to_requant called on incompatible BN layer {type(bn)}"
+    assert isinstance(
+        act, (PACTUnsignedAct, PACTAsymmetricAct)), f"bn_act_to_requant called on incompatible activation {type(act)}"
 
     signed_act = isinstance(act, PACTAsymmetricAct)
     eps_in = extract_eps(act_node.meta['quant'].eps_in).cpu().clone().detach().squeeze()
@@ -396,8 +404,8 @@ def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24, cmsis_req
     if skip_identity_rqs and (eps_in.numel() == eps_out.numel() == 1 and eps_in == eps_out and bn is None):
         return None
 
-    gamma_h = (bn.weight/torch.sqrt(bn.running_var+bn.eps)) if bn is not None else torch.ones_like(eps_in)
-    beta_h = bn.bias - bn.running_mean * gamma_h if bn is not None else torch.zeros_like(gamma_h)
+    gamma_h = (bn.weight / torch.sqrt(bn.running_var + bn.eps)) if bn is not None else torch.ones_like(eps_in)
+    beta_h = bn.bias - bn.running_mean * gamma_h if bn is not None else -act.running_mean*alpha_h
     gamma_h *= eps_in
     gamma_h /= eps_out
     beta_h /= eps_out
@@ -432,7 +440,13 @@ def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24, cmsis_req
             gamma_h = gamma_h.reshape((gamma_h.numel(), 1, 1, 1))
             beta_h = beta_h.reshape((beta_h.numel(), 1, 1, 1))
 
-    requant = RequantShift(gamma_h, beta_h, act.n_levels, signed_act, D, cmsis_requant=cmsis_requant, requant_node=requant_node)
+    requant = RequantShift(gamma_h,
+                           beta_h,
+                           act.n_levels,
+                           signed_act,
+                           D,
+                           cmsis_requant = cmsis_requant,
+                           requant_node = requant_node)
     return requant
 
 class IntegerizeBNActPass(SequentialPass):
@@ -655,7 +669,7 @@ class FixChannelNumbersPass(FxPass):
         elif node.op != 'placeholder' and node not in self.visited_nodes:
             self.visited_nodes.add(node)
             for inp in node.all_input_nodes:
-                    self.fix_conv_channels(gm, inp, force_out_channels)
+                self.fix_conv_channels(gm, inp, force_out_channels)
 
     def run_pass(self, gm : fx.GraphModule):
         out_nodes = [n for n in gm.graph.nodes if n.op == 'output']
@@ -773,11 +787,11 @@ class IntegerizeBNPACTHardActsPass(SequentialPass):
                     gamma_h = gamma_h.reshape((gamma_h.numel(),))
                     beta_h = beta_h.reshape((beta_h.numel(),))
             elif isinstance(bn, nn.BatchNorm2d):
-                    gamma_h = gamma_h.reshape((gamma_h.numel(), 1, 1))
-                    beta_h = beta_h.reshape((beta_h.numel(), 1, 1))
+                gamma_h = gamma_h.reshape((gamma_h.numel(), 1, 1))
+                beta_h = beta_h.reshape((beta_h.numel(), 1, 1))
             elif isinstance(bn, nn.BatchNorm3d):
-                    gamma_h = gamma_h.reshape((gamma_h.numel(), 1, 1, 1))
-                    beta_h = beta_h.reshape((beta_h.numel(), 1, 1, 1))
+                gamma_h = gamma_h.reshape((gamma_h.numel(), 1, 1, 1))
+                beta_h = beta_h.reshape((beta_h.numel(), 1, 1, 1))
         #TODO add bias functionality for asymmetric activations
         if signed_act:
             clip_bound = np.floor(q_act.n_levels/2 + 0.01)
@@ -859,11 +873,11 @@ class IntegerizePACTNetPass(SequentialPass):
         # with epsilons annotated everywhere, we can integerize linear
         # functions (conv and FC)
         if ternarize:
-        # Look for Conv-BN-Acts, integerize the Conv and and replace the BN-Act
-        # with Threshold layers
+            # Look for Conv-BN-Acts, integerize the Conv and and replace the BN-Act
+            # with Threshold layers
             passes.append(TernarizeConvBNActPass(symbolic_trace=symbolic_trace))
         else:
-        # simply integerize PACTConvs' convolutional weights
+            # simply integerize PACTConvs' convolutional weights
             passes.append(IntegerizePACTConvPass(symbolic_trace=symbolic_trace))
         passes.append(IntegerizePACTLinearPass(symbolic_trace=symbolic_trace))
         #passes.append(IntegerizeBNPACTHardActsPass(D1=D1, D2=D2, symbolic_trace=symbolic_trace))

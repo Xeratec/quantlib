@@ -47,55 +47,16 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 torch.fx.wrap('len')
 
 __all__ = [
-    '_PACTActivation',
-    '_PACTLinOp',
-    '_PACTEps',
-    'PACTUnsignedAct',
-    'PACTAsymmetricAct',
-    'PACTConv2d',
-    'PACTConv1d',
-    'PACTConstWrap',
-    'PACTIntegerConstWrap',
-    'PACTCausalConv1d',
-    'PACTLinear',
-    'PACTQuantize',
-    'TQTQuantize',
-    'PACTIntegerAdd',
-    'PACTIntegerAddMask',
-    'PACTIntegerConcat',
-    'PACTIntegerMatmul',
-    'PACTIntegerSoftmax',
-    'PACTIntegerLayerNorm',
-    'PACTIntegerGELU',
-    'PACTSoftmax',
-    'PACTITAMax',
-    'PACTIntegerITAMax',
-    'PACTITAPartialMax',
-    'PACTIntegerITAPartialMax',
-    'PACTGELU',
-    'PACTLayerNorm',
-    'PACTRMSNorm',
-    'PACTIntegerRMSNorm',
-    'PACTIntegerEmbedding',
-    'PACTEmbedding',
-    'PACTWrapModule',
-    'PACTWrapMHSA',
-    'PACTWrapLinearAttention',
-    'PACTWrapCLCA',
-    'RequantShift',
-    'HardActRequantShift',
-    'PACTHardswish',
-    'PACTHardsigmoid',
-    'PACTIntegerHardswish',
-    'PACTIntegerHardsigmoid',
-    'PACTMean',
-    'PACTIntegerMean',
-    'PACTDiv',
-    'PACTIntegerDiv',
-    'PACTTrueIntegerDiv',
-    'PACTExp',
-    'PACTIntegerExp',
-    'ChannelwiseThreshold'
+    '_PACTActivation', '_PACTLinOp', '_PACTEps', 'PACTUnsignedAct', 'PACTAsymmetricAct', 'PACTConv2d', 'PACTConv1d',
+    'PACTConstWrap', 'PACTIntegerConstWrap', 'PACTCausalConv1d', 'PACTLinear', 'PACTQuantize', 'TQTQuantize',
+    'PACTIntegerAdd', 'PACTIntegerAddMask', 'PACTIntegerConcat', 'PACTIntegerMatmul', 'PACTIntegerSoftmax',
+    'PACTIntegerLayerNorm', 'PACTIntegerGELU', 'PACTSoftmax', 'PACTITAMax', 'PACTIntegerITAMax', 'PACTITAPartialMax',
+    'PACTIntegerITAPartialMax', 'PACTGELU', 'PACTLayerNorm', 'PACTRMSNorm', 'PACTIntegerRMSNorm',
+    'PACTIntegerEmbedding', 'PACTEmbedding', 'PACTWrapModule', 'PACTWrapMHSA', 'PACTWrapLinearAttention',
+    'PACTWrapCLCA', 'RequantShift', 'HardActRequantShift', 'PACTHardswish', 'PACTHardsigmoid', 'PACTIntegerHardswish',
+    'PACTIntegerHardsigmoid', 'PACTMean', 'PACTIntegerMean', 'PACTDiv', 'PACTIntegerDiv', 'PACTTrueIntegerDiv',
+    'PACTExp', 'PACTIntegerExp', 'ChannelwiseThreshold'
+    'SofterMax', 'IntegerSofterMax'
 ]
 
 class RequantShift(nn.Module):
@@ -133,7 +94,7 @@ class RequantShift(nn.Module):
                 lo = (c * -1)
                 hi = (c-1)
 
-                y_tilde = torch.clip(y, min=lo, max=hi)
+                y_tilde = torch.where(torch.isfinite(y), torch.clip(y, min=lo, max=hi), y)
                 return y_tilde
 
         @staticmethod
@@ -445,6 +406,8 @@ class _PACTActivation(nn.Module):
             stat = stat[stat > (torch.finfo(stat.dtype).min )]
             stat = stat[stat < (torch.finfo(stat.dtype).max)]
 
+            if(stat.numel == 0):
+                return
 
             # SCHEREMO: get min and max
             newTruemax = max(self.truemax.item(), stat.max())
@@ -506,7 +469,9 @@ class _PACTActivation(nn.Module):
 
             x_stat = torch.tensor(res, device=self.max.device, dtype=self.max.dtype) if not isinstance(res, torch.Tensor) else res
             self.updateHistogram(x_stat)
-
+            x_stat = x_stat[torch.isfinite(x_stat)]
+            x_stat = x_stat[x_stat > (torch.finfo(x_stat.dtype).min )]
+            x_stat = x_stat[x_stat < (torch.finfo(x_stat.dtype).max)]
             if self.init_clip == 'percentile' and self.ready:
                 res = torch.clip(res, min=self.min, max=self.max)
             else:
@@ -535,6 +500,9 @@ class _PACTActivation(nn.Module):
 
             return res
         else:
+            res = x
+            x_stat = torch.tensor(res, device=self.max.device, dtype=self.max.dtype) if not isinstance(res, torch.Tensor) else res
+            self.updateHistogram(x_stat)
             eps = self.get_eps()
             if self.tqt:
                 #Make sure that the activation is correctly registered with a
@@ -3322,3 +3290,103 @@ class PACTWrapModule(nn.Module):
             return z
         else:
             return y
+
+import torch
+
+def SofterMax(A_requant, integerize=True):
+    # Get the number of heads
+    n_heads = A_requant.shape[-3]
+
+    # Define the number of bits
+    B = 8
+
+    # Calculate the logarithm of the base e
+    log2e = torch.log2(torch.exp(torch.tensor(1.0)))
+
+    # Calculate the scaling factor
+    eps_x = B / (2**B * log2e)
+
+    # Scale the input values if integerize is True
+    if integerize:
+        x = A_requant * eps_x
+    else:
+        x = A_requant.float()
+
+    max_values = -torch.inf * torch.ones((n_heads, x.shape[1], x.shape[2]), device=x.device)
+    exp_result = torch.zeros((n_heads, x.shape[1], x.shape[2]), device=x.device)
+    sum = 0
+
+    # Calculate the exponential values
+    for i in range(n_heads):
+        for j in range(x.shape[1]):
+            max_val = x[i, j, 0]
+            for k in range(x.shape[2]):
+                if x[i, j, k] > max_val:
+                    max_val = x[i, j, k]
+                max_values[i, j, k] = int(max_val)
+                if k == 0:
+                    exp_result[i, j, k] = 1
+                    sum = exp_result[i, j, k]
+                else:
+                    exp_result[i, j, k] = 2 ** (x[i, j, k] - max_values[i, j, k])
+                    sum = int(exp_result[i, j, k] + sum) >> int(max_values[i, j, k] - max_values[i, j, k-1])
+
+    # Normalize the exponential values to get the softmax probabilities
+    for i in range(n_heads):
+        for j in range(x.shape[1]):
+            for k in range(x.shape[2]):
+                exp_result[i, j, k] = (int(exp_result[i, j, k]) >> int(max_values[i, j, -1] - max_values[i, j, k])) / sum
+
+    if integerize:
+        return exp_result * (2**7 - 1)
+    else:
+        return exp_result
+
+def IntegerSofterMax(A_requant, integerize=True):
+    # Get the number of heads
+    n_heads = A_requant.shape[-3]
+
+    # Define the number of bits
+    B = 8
+
+    # Calculate the logarithm of the base e
+    log2e = torch.log2(torch.exp(torch.tensor(1.0)))
+
+    # Calculate the scaling factor
+    eps_x = B / (2**B * log2e)
+
+    # Scale the input values if integerize is True
+    if integerize:
+        x = A_requant * eps_x
+    else:
+        x = A_requant.float()
+
+    max_values = -torch.inf * torch.ones((n_heads, x.shape[1], x.shape[2]), device=x.device)
+    exp_result = torch.zeros((n_heads, x.shape[1], x.shape[2]), device=x.device)
+    sum = 0
+
+    # Calculate the exponential values
+    for i in range(n_heads):
+        for j in range(x.shape[1]):
+            max_val = x[i, j, 0]
+            for k in range(x.shape[2]):
+                if x[i, j, k] > max_val:
+                    max_val = x[i, j, k]
+                max_values[i, j, k] = int(max_val)
+                if k == 0:
+                    exp_result[i, j, k] = 1
+                    sum = exp_result[i, j, k]
+                else:
+                    exp_result[i, j, k] = 2 ** (x[i, j, k] - max_values[i, j, k])
+                    sum = int(exp_result[i, j, k] + sum) >> int(max_values[i, j, k] - max_values[i, j, k-1])
+
+    # Normalize the exponential values to get the softmax probabilities
+    for i in range(n_heads):
+        for j in range(x.shape[1]):
+            for k in range(x.shape[2]):
+                exp_result[i, j, k] = (int(exp_result[i, j, k]) >> int(max_values[i, j, -1] - max_values[i, j, k])) / sum
+
+    if integerize:
+        return exp_result * (2**7 - 1)
+    else:
+        return exp_result
