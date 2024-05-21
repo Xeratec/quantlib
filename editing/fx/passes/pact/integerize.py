@@ -368,7 +368,7 @@ class ReplacePACTCausalConv1DPass(ReplaceSequentialPatternPass):
         super(ReplacePACTCausalConv1DPass, self).__init__(pattern, symbolic_trace, replace_pact_causalconv1d_padconv1d_fun, name)
 
 
-def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24, cmsis_requant=False, requant_node=False, skip_identity_rqs=True):
+def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24, recenter_act=False, cmsis_requant=False, requant_node=False, skip_identity_rqs=True):
     modules = dict(gm.named_modules())
     if not isinstance(D, torch.Tensor):
         D = torch.tensor(D)
@@ -396,8 +396,14 @@ def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24, cmsis_req
     if skip_identity_rqs and (eps_in.numel() == eps_out.numel() == 1 and eps_in == eps_out and bn is None):
         return None
 
-    gamma_h = (bn.weight/torch.sqrt(bn.running_var+bn.eps)) if bn is not None else torch.ones_like(eps_in)
-    beta_h = bn.bias - bn.running_mean * gamma_h if bn is not None else torch.zeros_like(gamma_h)
+    gamma_h = torch.ones_like(eps_in)
+    beta_h =  torch.zeros_like(gamma_h)
+    if bn is not None:
+        gamma_h = (bn.weight/torch.sqrt(bn.running_var+bn.eps))
+        beta_h = bn.bias - bn.running_mean * gamma_h
+    elif recenter_act:
+        beta_h = -(act.clip_hi + act.clip_lo)/2
+
     gamma_h *= eps_in
     gamma_h /= eps_out
     beta_h /= eps_out
@@ -436,17 +442,17 @@ def bn_act_to_requant_fun(gm : fx.GraphModule, match : Match, D=2**24, cmsis_req
     return requant
 
 class IntegerizeBNActPass(SequentialPass):
-    def __init__(self, D : float = 2**24, cmsis_requant=False, requant_node=False, skip_identity_rqs=True, symbolic_trace: callable = PACT_symbolic_trace,):
+    def __init__(self, D : float = 2**24, recenter_act=False, cmsis_requant=False, requant_node=False, skip_identity_rqs=True, symbolic_trace: callable = PACT_symbolic_trace,):
         passes = []
         # replace all combinations of BN + PACT activation with RequantShift layers
         for act_name, act_type in [("UNSIGNED_ACT", PACTUnsignedAct), ("SIGNED_ACT", PACTAsymmetricAct)]:
             for bn_name, bn_type in [("BN1D", nn.BatchNorm1d), ("BN2D", nn.BatchNorm2d), ("BN3D", nn.BatchNorm3d)]:
                 pattern = nn.Sequential(bn_type(1), act_type(n_levels=256, init_clip='max', learn_clip=False, act_kind='identity'))
-                passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, bn_act_to_requant_fun, f"_INTEGERIZE_{bn_name}_{act_name}_PASS", D=D, cmsis_requant=cmsis_requant, requant_node=requant_node, skip_identity_rqs=skip_identity_rqs))
+                passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, bn_act_to_requant_fun, f"_INTEGERIZE_{bn_name}_{act_name}_PASS", D=D, recenter_act=recenter_act, cmsis_requant=cmsis_requant, requant_node=requant_node, skip_identity_rqs=skip_identity_rqs))
 
             #also replace "freestanding" activations AFTER replacing the BN+Act stacks
             pattern = nn.Sequential(act_type(n_levels=256, init_clip='max', learn_clip=False, act_kind='identity'))
-            passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, bn_act_to_requant_fun, f"_INTEGERIZE_{act_name}_PASS", D=D, cmsis_requant=cmsis_requant, requant_node=requant_node, skip_identity_rqs=skip_identity_rqs))
+            passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, bn_act_to_requant_fun, f"_INTEGERIZE_{act_name}_PASS", D=D, recenter_act=recenter_act, cmsis_requant=cmsis_requant, requant_node=requant_node, skip_identity_rqs=skip_identity_rqs))
 
         super(IntegerizeBNActPass, self).__init__(*passes, name_prefix="_INTEGERIZE_BN_ACT_PASS")
 
