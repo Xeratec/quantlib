@@ -21,7 +21,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-import ipdb
 import copy
 import math
 import warnings
@@ -1859,8 +1858,10 @@ class PACTIntegerSoftmax(torch.nn.Module):
     def __repr__(self):
         return f"PACTIntegerSoftmax(n_levels={self.n_levels.item()}, eps_in={self.eps_in}, coeffA={self.coeffA.item()}, coeffB={self.coeffB.item()}, coeffC={self.coeffC.item()}, log2={self.log2.item()})"
 
+
 class PACTITAMax(_PACTEps):
-    def __init__(self,  n_levels: int = 256, **kwargs):
+
+    def __init__(self, n_levels: int = 256, **kwargs):
         super().__init__(True)
 
         kwargs_stats = {
@@ -1877,21 +1878,25 @@ class PACTITAMax(_PACTEps):
         self.act = PACTAsymmetricAct(**kwargs_stats)
         self.n_levels = n_levels
 
-        self.B = math.log2( self.n_levels )
-        self.eps_max = torch.Tensor( (self.B / (2**self.B),) )
+        self.B = math.log2(self.n_levels)
+        self.eps_max = torch.Tensor((self.B / (2**self.B),))
 
     def set_eps_in(self, eps_list):
-        super().set_eps_in(eps_list)
+        if eps_list[0] is None:
+            eps_in = torch.Tensor((1.0,))
+            self._eps_in[:] = eps_in
+        else:
+            super().set_eps_in(eps_list)
 
     def forward(self, x):
 
-        def RQ(x, eps, round=True):
+        def RQ(x, eps, round = True):
             if self.started:
                 if round:
                     # Also add the minimal representalbe float value to prevent edge cases from being rounded down
-                    x = torch.floor(x/eps + 0.5 + torch.finfo(x.dtype).eps)*eps
+                    x = torch.floor(x / eps + 0.5 + torch.finfo(x.dtype).eps) * eps
                 else:
-                    x = torch.floor(x/eps + torch.finfo(x.dtype).eps)*eps
+                    x = torch.floor(x / eps + torch.finfo(x.dtype).eps) * eps
             return x
 
         _, H, S, _ = x.size()
@@ -1909,17 +1914,19 @@ class PACTITAMax(_PACTEps):
                 # Use maximum gather by statistics
                 #x = x - torch.repeat_interleave(self.act.max, H*S*S).reshape(-1, H, S, S) + (((self.n_levels-1)/2))*eps
                 global_max = torch.max(x, dim = -1)[0]
-                x = x - torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) + (((self.n_levels-1)/2)-1)*eps
+                x = x - torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) + ((
+                    (self.n_levels - 1) / 2) - 1) * eps
             else:
                 # Use actual maximum
                 global_max = torch.max(x, dim = -1)[0]
-                x = x - torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) + (((self.n_levels-1)/2)-1)*eps
+                x = x - torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) + ((
+                    (self.n_levels - 1) / 2) - 1) * eps
 
             # Get quantized values
-            x = RQ(x/eps, 1, round=True)
+            x = RQ(x / eps, 1, round = True)
 
             # Clip quantized values
-            x = torch.clamp(x, min=-128, max=127)
+            x = torch.clamp(x, min = -128, max = 127)
         ########################################################################
 
         # Find maximum for each row
@@ -1929,15 +1936,16 @@ class PACTITAMax(_PACTEps):
         diff = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) - x
 
         # Shift the values by B-log2B -> multiply by B/2**B = eps_max = log2e * eps_in
-        shift = RQ(diff*self.eps_max.type_as(x), 1, round = True)
+        shift = RQ(diff * self.eps_max.type_as(x), 1, round = True)
 
         # Update the accumulated sum and add the accumulation over the current part of the row
         exp_sum = RQ(torch.sum(self.n_levels / 2**shift, dim = -1), 1, round = False)
 
-        exp_sum_inverse = RQ(self.n_levels * (self.n_levels-1) / exp_sum, 1, round = False)
+        exp_sum_inverse = RQ(self.n_levels * (self.n_levels - 1) / exp_sum, 1, round = False)
 
         # Calculate the activation value
-        ret = RQ((torch.repeat_interleave(exp_sum_inverse, S).reshape(-1, H, S, S) / 2**shift), 1, round=False) / (self.n_levels-1)
+        ret = RQ((torch.repeat_interleave(exp_sum_inverse, S).reshape(-1, H, S, S) / 2**shift), 1,
+                 round = False) / (self.n_levels - 1)
         return ret
 
 
@@ -2050,7 +2058,11 @@ class PACTITAPartialMax(_PACTEps):
         self.eps_max = torch.Tensor((self.B / (2**self.B),))
 
     def set_eps_in(self, eps_list):
-        super().set_eps_in(eps_list)
+        if eps_list[0] is None:
+            eps_in = torch.Tensor((1.0,))
+            self._eps_in[:] = eps_in
+        else:
+            super().set_eps_in(eps_list)
 
     def forward(self, x):
 
