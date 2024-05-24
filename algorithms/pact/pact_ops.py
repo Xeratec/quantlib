@@ -756,6 +756,13 @@ class PACTIntegerAddMask(PACTIntegerAdd):
     ):
         super().__init__(num_args, force_out_eps, signed, n_levels, **kwargs)
 
+        # JUNGVI: We want this activation to be assymetric and shift activations during integerization as softmax is shift-invariant
+        # self.acts[0] = PACTAsymmetricAct(**act_out_cfg)
+        # self.act_out = PACTAsymmetricAct(**act_out_cfg)
+
+        # JUNGVI: Do not requantize the mask to 8 bits
+        self.acts[1].n_levels = 2**9
+
     def reassign_epsilons(self):
         # Always use the epislon from the first activation
         self.act_out.clip_lo.data.copy_(self.acts[0].clip_lo.data)
@@ -765,6 +772,7 @@ class PACTIntegerAddMask(PACTIntegerAdd):
             i.clip_lo.data.copy_(self.acts[0].clip_lo.data)
             i.clip_hi.data.copy_(self.acts[0].clip_hi.data)
 
+        self.acts[1].clip_lo.data = torch.Tensor((-256,))
 
 class PACTIntegerMatmul(torch.nn.Module):
     def __init__(
