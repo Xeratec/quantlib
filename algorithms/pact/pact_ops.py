@@ -1962,13 +1962,12 @@ class PACTIntegerITAMax(torch.nn.Module):
             _, H, S, _ = x.size()
 
             global_max = torch.max(x, dim = -1)[0].type(torch.int8)
-
             # Find the difference between the maximum and x in the current part of the row
             diff = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) - x.type(torch.int32)
-
             # shift = torch.floor(diff * eps_max)
             #shift = torch.floor(diff * eps_max + 0.5 + torch.finfo(x.dtype).eps)
             shift = torch.floor(diff * eps_in + 0.5 + torch.finfo(x.dtype).eps)
+            
             # Update the accumulated sum and add the accumulation over the current part of the row
             exp_sum = torch.floor(torch.sum(n_levels / 2**shift, dim = -1))
 
@@ -1976,6 +1975,7 @@ class PACTIntegerITAMax(torch.nn.Module):
 
             # Calculate the activation value
             ret = torch.floor(torch.repeat_interleave(exp_sum_inverse, S).reshape(-1, H, S, S) / 2**shift).type_as(x)
+            ret[ret.isnan()] = 0
             return ret
 
         @staticmethod
@@ -2023,7 +2023,7 @@ class PACTIntegerITAMax(torch.nn.Module):
         global_max = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S)
         # x=x - global_max
         # x= x+(self.n_levels-1)/2*self.eps_max/self.eps_in
-        bias= torch.floor(self.D * (self.n_levels - 1) / 2 - self.D * global_max *self.eps_in/self.eps_max)
+        bias= torch.floor((self.D * (self.n_levels - 1) / 2 - 1) - self.D * global_max *self.eps_in/self.eps_max)
         self.rq = RequantShift(mul = self.mul[0],
                                add = bias,
                                signed = True,
@@ -2047,7 +2047,7 @@ class PACTITAPartialMax(_PACTEps):
             'noisy': False,
             'act_kind': 'identity',
             'learn_clip': True,
-            'upper_percentile': 95.0
+            'upper_percentile': 99.9
         }
         self.act = PACTAsymmetricAct(**kwargs_stats)
         self.n_levels = n_levels
@@ -2137,7 +2137,7 @@ class PACTITAPartialMax(_PACTEps):
 
             # Shift the values by B-log2B -> multiply by B/2**B = eps_max = log2e * eps_in
             shift = RQ(diff * self.eps_max.type_as(x), 1, round=True)
-
+            
             # Calculate exponential sum over the current part of the row
             exp_sum = RQ(torch.sum(self.n_levels / 2**shift, dim = -1), 1, round=False)
 
