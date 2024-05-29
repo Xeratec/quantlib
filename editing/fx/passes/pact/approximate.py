@@ -51,7 +51,7 @@ def replSoftmax(gm : fx.GraphModule, match : Match, mode: str, act_cfg: dict, **
     if mode == "I-BERT":
         # Insert unsigned activation before softmax
         # replacement_class = nn.Sequential(PACTAsymmetricAct(**default_act_kwargs), PACTSoftmax(**kwargs))
-        replacement_class = nn.Sequential(PACTSoftmax(**kwargs))
+        replacement_class = PACTSoftmax(**kwargs)
     else:
         cfg = {**default_act_kwargs, **kwargs}
 
