@@ -175,9 +175,9 @@ class TruedivReplacementPass(ModularizePass):
 
     @staticmethod
     def truediv_replacement_fn(node, Delta):
-        return (PACTDiv(Delta), node.args, node.kwargs)
+        return (PACTDiv(Delta, stable=False, autoscale=False), node.args, node.kwargs)
 
-    def __init__(self, Delta=2**14, **kwargs):
+    def __init__(self, Delta=2**8, **kwargs):
         self.kwargs = kwargs
         target = [operator.truediv]
         super().__init__(op='call_function', target=tuple(target), replacement_fn = partial(self.truediv_replacement_fn, Delta=Delta), name="DIV_REPLACEMENT_PASS")
