@@ -224,11 +224,11 @@ class ModularizeActivationsPass(ModularizePass):
                               F.mish : nn.Mish}
 
 
-    @staticmethod
-    def act_node_to_module(node):
+    @classmethod
+    def act_node_to_module(cls, node):
         module_inst_args = node.args[1:]
         module_inst_kwargs = {k:v for k,v in node.kwargs.items() if k != 'input'}
-        if node.target in inplace_act_functions:
+        if node.target in cls.inplace_act_functions:
             module_inst_kwargs['inplace'] = True
         module_call_args = node.args[0:1]
         module_call_kwargs = {k:v for k,v in node.kwargs.items() if k == 'input'}

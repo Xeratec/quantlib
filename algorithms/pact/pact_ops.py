@@ -756,9 +756,17 @@ class PACTIntegerAddMask(PACTIntegerAdd):
         self.act_out.clip_lo.data.copy_(self.acts[0].clip_lo.data)
         self.act_out.clip_hi.data.copy_(self.acts[0].clip_hi.data)
 
-        for i in self.acts:
-            i.clip_lo.data.copy_(self.acts[0].clip_lo.data)
-            i.clip_hi.data.copy_(self.acts[0].clip_hi.data)
+    def forward(self, *x: torch.Tensor):
+        total = self.acts[0](x[0]) + x[1]
+
+        if self.act_out is not None:
+            total = self.act_out(total)
+        if isinstance(total, QTensor):
+            if self.act_out is not None:
+                total.eps = self.act_out.get_eps()
+            else:
+                total.eps = self.acts[0].get_eps()
+        return total
 
 
 class PACTIntegerMatmul(torch.nn.Module):
