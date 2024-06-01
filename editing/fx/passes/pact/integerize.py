@@ -405,7 +405,7 @@ def bn_act_to_requant_fun(gm: fx.GraphModule,
         return None
 
     gamma_h = (bn.weight / torch.sqrt(bn.running_var + bn.eps)) if bn is not None else torch.ones_like(eps_in)
-    beta_h = bn.bias - bn.running_mean * gamma_h if bn is not None else torch.zeros_like(eps_in)#-(act.clip_hi-act.clip_lo)//2
+    beta_h = bn.bias - bn.running_mean * gamma_h if bn is not None else -(act.clip_hi)//2 #torch.zeros_like(eps_in)
     gamma_h *= eps_in
     gamma_h /= eps_out
     beta_h /= eps_out

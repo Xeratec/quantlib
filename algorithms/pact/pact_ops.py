@@ -93,8 +93,8 @@ class RequantShift(nn.Module):
                 lo = (c * -1)
                 hi = (c-1)
 
-                #y_tilde = torch.where(torch.isfinite(y), torch.clip(y, min=lo, max=hi), y)
-                y_tilde = torch.clip(y, min=lo, max=hi)
+                y_tilde = torch.where(torch.isfinite(y), torch.clip(y, min=lo, max=hi), y)
+                #y_tilde = torch.clip(y, min=lo, max=hi)
                 return y_tilde
 
         @staticmethod
@@ -381,7 +381,16 @@ class _PACTActivation(nn.Module):
             min_init = -1. if self.signed else 0.
             self.truemin          = torch.nn.Parameter(torch.Tensor((min_init,)), requires_grad=False)
             self.register_buffer('ready', torch.tensor(False))
-
+    
+    def resetHistogram(self):
+        if self.init_clip == "percentile":
+            self.histogram[:] = torch.zeros_like(self.histogram)
+            self.prevEdges[:] = torch.zeros_like(self.prevEdges)
+            self.truemax[:] = 1
+            min_init = -1. if self.signed else 0.
+            self.truemin[:] = min_init
+    
+    
     # SCHEREMO: Assume self.histogram magnitude list of data, binned
     def updateHistogram(self, stat):
         if self.init_clip != "percentile":
@@ -501,8 +510,7 @@ class _PACTActivation(nn.Module):
             return res
         else:
             res = x
-            x_stat = torch.tensor(res, device=self.max.device, dtype=self.max.dtype) if not isinstance(res, torch.Tensor) else res
-            self.updateHistogram(x_stat)
+
             eps = self.get_eps()
             if self.tqt:
                 #Make sure that the activation is correctly registered with a
@@ -516,6 +524,13 @@ class _PACTActivation(nn.Module):
                 result = PACTQuantize(x, eps, self.clip_lo, clip_upper, floor=(not self.rounding), clip_gradient=self.clip_gradient, noisy=self.noisy)
             if isinstance(result, QTensor):
                 result.eps = eps
+            
+            result[x == torch.finfo(x.dtype).min] = -torch.inf
+            x_stat = torch.tensor(result, device=self.max.device, dtype=self.max.dtype) if not isinstance(result, torch.Tensor) else result
+            x_stat = x_stat[torch.isfinite(x_stat)]
+            x_stat = x_stat[x_stat > -self.n_levels//2 ]
+            x_stat = x_stat[x_stat < self.n_levels//2]
+            self.updateHistogram(x_stat)
             return result
 
 
@@ -1776,8 +1791,8 @@ class PACTIntegerSoftmax(torch.nn.Module):
             x[x <= (torch.finfo(x.dtype).min + torch.finfo(x.dtype).eps)] = torch.nan
 
             xTilde = x - rqx
-            z = torch.floor(-xTilde / log2)
-            p = xTilde + z * log2
+            z = torch.floor((-xTilde / log2)*2**12)
+            p = xTilde + z * log2 /2**12
             y = torch.floor(((coeffA * (p + coeffB)**2 + coeffC)) // (2**z))
             y[y.isnan()] = 0
             ysum = torch.sum(y, -1, keepdim = True)
@@ -1837,7 +1852,7 @@ class PACTIntegerSoftmax(torch.nn.Module):
 
         #self.log2.data[0] = 2**torch.round(torch.Tensor((math.log2(math.log2(2)/(eps)),)))
         #self.log2.data[0] = torch.round(torch.Tensor((math.log2(2)/(eps)),))
-        self.log2.data[0] = torch.round(math.log2(2) / (eps))
+        self.log2.data[0] = torch.round(math.log2(2) / (eps)*(2**12))
 
     def forward(self, x):
         """Approximate Softmax implementation according to the I-BERT paper:

@@ -234,6 +234,7 @@ class PACTActController(Controller):
                 elif cmd == 'start':
                     for m in self.modules:
                         self.reset_clip_bounds(m, m.init_clip)
+                        m.resetHistogram()
                         m.started |= True
                     self.log("Started activation quantization!")
 
