@@ -349,7 +349,7 @@ def export_net(net: nn.Module,
         if isinstance(in_data, torch.Tensor):
             input = in_data.clone().to(dtype=torch.float64)
             input_np = [torch.round(input.detach()).numpy().astype(np.int64)]
-            _output = net_integerized(input).to(dtype=torch.float64)
+            _output = net_integerized(input)
         else:
             input = [t.clone().to(dtype=torch.float64) for t in in_data]
             input_np = [torch.round(t.detach()).numpy().astype(np.int64) for t in input]
