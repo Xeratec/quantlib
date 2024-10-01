@@ -93,8 +93,8 @@ class RequantShift(nn.Module):
                 lo = (c * -1)
                 hi = (c-1)
 
-                y_tilde = torch.where(torch.isfinite(y), torch.clip(y, min=lo, max=hi), y)
-                #y_tilde = torch.clip(y, min=lo, max=hi)
+                #y_tilde = torch.where(torch.isfinite(y), torch.clip(y, min=lo, max=hi), y)
+                y_tilde = torch.clip(y, min=lo, max=hi)
                 return y_tilde
 
         @staticmethod
@@ -2218,8 +2218,12 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
                 # Shift the values by B-log2B -> multiply by B/2**B = eps_max = log2e * eps_in
                 shift = torch.floor(diff * eps_max + 0.5 + torch.finfo(x.dtype).eps).type(torch.int32)
 
+                # Calculate exponential and set to zero if infinite
+                exp = (n_levels / 2**shift)
+                exp[exp == float('inf')] = 0
+
                 # Calculate exponential sum over the current part of the row
-                exp_sum = torch.floor(torch.sum(n_levels / 2**shift, dim = -1))
+                exp_sum = torch.floor(torch.sum(exp, dim = -1))
 
                 # Update the accumulated sum and add the accumulation over the current part of the row
                 exp_partial_sum = torch.floor(exp_partial_sum / 2**shift_sum) + exp_sum
@@ -2237,6 +2241,10 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
             # Calculate the activation value
             ret = torch.floor(torch.repeat_interleave(exp_partial_sum_inverse, S).reshape(-1, H, S, S) /
                               2**shift).type_as(x)
+
+            # Replace NaN values with zero
+            ret[ret == float('inf')] = 0
+
             return ret
 
         @staticmethod
