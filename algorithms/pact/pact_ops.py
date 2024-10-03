@@ -2052,7 +2052,7 @@ class PACTIntegerITAMax(torch.nn.Module):
             return self.MySoftmax.forward(None, x, self.n_levels.type_as(x), self.eps_max)
 
 class PACTITAPartialMax(_PACTEps):
-    def __init__(self, processing_uints: int = 16, ita_sequence_length: int = 64, n_levels: int = 256, **kwargs):
+    def __init__(self, processing_uints: int = 16, ita_sequence_length: int = 64, n_levels: int = 256, eps_max_factor: int = 32, max_estimation: Literal['statistical', 'global'] = 'statistical', **kwargs):
         super().__init__(True)
 
         kwargs_stats = {
@@ -2068,9 +2068,15 @@ class PACTITAPartialMax(_PACTEps):
         self.n_levels = n_levels
         self.width = processing_uints
         self.groups = ita_sequence_length//processing_uints
+        self.max_estimation = max_estimation
+        self.eps_max_factor = eps_max_factor
+
+        # Check valid max estimation method
+        assert self.max_estimation in ['statistical', 'global'], f"[PACTITAPartialMax] Invalid max estimation method: {self.max_estimation}! Select either 'statistical' or 'global'!"
 
         self.B = math.log2( self.n_levels )
-        self.eps_max = torch.Tensor((32*self.B / (2**self.B),))
+        self.eps_max = torch.Tensor((self.eps_max_factor * self.B / (2**self.B),))
+
 
     def set_eps_in(self, eps_list):
         if eps_list[0] is None:
@@ -2078,6 +2084,9 @@ class PACTITAPartialMax(_PACTEps):
             self._eps_in[:] = eps_in
         else:
             super().set_eps_in(eps_list)
+
+    def extra_repr(self):
+        return f"n_levels={self.n_levels}, eps_max_factor={self.eps_max_factor}, max_estimation={self.max_estimation}"
 
     def forward(self, x):
 
@@ -2102,23 +2111,21 @@ class PACTITAPartialMax(_PACTEps):
             # Center inputs around zero
             eps = self.eps_max.type_as(x)
 
-            if self.act.started:
+            if self.act.started and self.max_estimation == 'statistical':
                 # Use maximum gather by statistics
                 x = x - torch.repeat_interleave(self.act.max, H*S*S).reshape(-1, H, S, S) + (((self.n_levels-1)/2))*eps
 
                 # import ipdb; ipdb.set_trace()
             else:
                 # Gather statistics about inputs
-                _ = self.act(x)
+                if not self.act.started:
+                    _ = self.act(x)
 
                 # import ipdb; ipdb.set_trace()
 
                 # Use actual maximum
                 global_max = torch.max(x, dim = -1)[0]
                 x = x - torch.repeat_interleave(global_max, S).reshape(-1, H, S, S) + (((self.n_levels-1)/2))*eps
-
-            # Print RMS difference between statistics and actual maximum
-            # print(f"[PACTITAPartialMax] RMS difference between statistics and actual maximum: {torch.sqrt(torch.mean((torch.max(x, dim=-1)[0] - self.act.max)**2))}")
 
             # Get quantized values
             x = RQ(x/eps, 1, round=True)
@@ -2184,7 +2191,10 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
     class MySoftmax(torch.autograd.Function):
 
         @staticmethod
-        def forward(ctx, x: torch.Tensor, n_levels: torch.Tensor, groups: int, group_width: int, eps_max: torch.Tensor):
+        def forward(ctx, x: torch.Tensor, n_levels: torch.Tensor, groups: int, group_width: int, eps_max_factor: int ):
+
+            B = torch.log2(n_levels).type_as(x)
+            eps_max = eps_max_factor * B / (2**B)
 
             _, H, S, _ = x.size()
 
@@ -2230,6 +2240,8 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
                 # Update the accumulated sum and add the accumulation over the current part of the row
                 exp_partial_sum = torch.floor(exp_partial_sum / 2**shift_sum) + exp_sum
 
+                import ipdb; ipdb.set_trace()
+
             ## STAGE 2: Calculate the softmax activation
             # Invert the partial sum
             exp_partial_sum_inverse = torch.floor(n_levels * (n_levels - 1) / exp_partial_sum).type(torch.int32)
@@ -2250,8 +2262,8 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
             return ret
 
         @staticmethod
-        @parse_args('v', 't', 'i', 'i', 't')
-        def symbolic(g, x, n_levels, groups, group_width, eps_max):
+        @parse_args('v', 't', 'i', 'i', 'i')
+        def symbolic(g, x, n_levels, groups, group_width, eps_max_factor):
 
             n_levels_ = g.op("Constant", value_t = n_levels)
 
@@ -2260,13 +2272,15 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
                         n_levels_t = n_levels,
                         groups_i = groups,
                         group_width_i = group_width,
-                        eps_max_t = eps_max)
+                        eps_max_factor_i = eps_max_factor)
 
     def __init__(self,
                  max_value,
                  n_levels: int = 256,
                  processing_uints: int = 16,
                  ita_sequence_length: int = 64,
+                 eps_max_factor: int = 32,
+                 max_estimation: Literal['statistical', 'global'] = 'statistical',
                  eps_in: float = 1. / 255,
                  D = 2**12,
                  export_node = False,
@@ -2280,17 +2294,21 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
         self.eps_in = eps_in
         self.export_node = export_node
         self.D = D
+        self.max_estimation = max_estimation
+        self.eps_max_factor = eps_max_factor
+
+        # Check valid max estimation method
+        assert self.max_estimation in ['statistical', 'global'], f"[PACTITAPartialMax] Invalid max estimation method: {self.max_estimation}! Select either 'statistical' or 'global'!"
 
         B = torch.log2(self.n_levels)
-        eps_max = 32 * B / (2**B)
-        self.eps_max = eps_max
+        self.eps_max = self.eps_max_factor * B / (2**B)
 
-        mul = torch.round(D * eps_in / eps_max)
+        mul = torch.round(D * eps_in / self.eps_max)
 
         # WIESEP: Because ITA uses MUL-DIV-ADD  the bias for of MUL-ADD-DIV convention needs to be rounded first and then
         # multiplied by D to correctly represent the behaviour of ITA.
         # WIESEP: Better to overstimate the maximum value, hence underestimating the bias
-        bias = D * torch.floor((self.n_levels - 1) / 2 - self.max / eps_max)
+        bias = D * torch.floor((self.n_levels - 1) / 2 - self.max / self.eps_max)
 
         # Make sure that eps_max is enforces
         self.rq = RequantShift(mul = mul[0],
@@ -2304,17 +2322,19 @@ class PACTIntegerITAPartialMax(torch.nn.Module):
         # Clip and rescale values to enforce eps_max = B / 2**B
         _, H, S, _ = x.size()
 
-        # global_max = torch.max(x, dim = -1)[0]
-        # global_max = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S)
-        # bias = self.D * torch.floor((self.n_levels - 1) / 2 - global_max / self.eps_max)
-        # self.rq.add = bias
+        with torch.no_grad():
+            if self.max_estimation == 'global':
+                global_max = torch.max(x, dim = -1)[0]
+                global_max = torch.repeat_interleave(global_max, S).reshape(-1, H, S, S)
+                bias = self.D * torch.floor((self.n_levels - 1) / 2 - global_max / self.eps_max)
+                self.rq.add = bias[0]
 
-        x_rq = self.rq(x)
+            x_rq = self.rq(x)
 
         if self.export_node:
-            return self.MySoftmax.apply(x_rq, self.n_levels.type_as(x), int(self.groups), int(self.group_width), self.eps_max)
+            return self.MySoftmax.apply(x_rq, self.n_levels.type_as(x), int(self.groups), int(self.group_width), int(self.eps_max_factor))
         else:
-            return self.MySoftmax.forward(None, x_rq, self.n_levels.type_as(x), int(self.groups), int(self.group_width), self.eps_max)
+            return self.MySoftmax.forward(None, x_rq, self.n_levels.type_as(x), int(self.groups), int(self.group_width), int(self.eps_max_factor))
 
 class PACTGELU(_PACTEps):
 
