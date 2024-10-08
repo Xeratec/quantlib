@@ -19,7 +19,5 @@
 # limitations under the License.
 # 
 
-from . import editing
-from . import algorithms
-from . import backends
+from .ste_ops import *
 

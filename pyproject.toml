@@ -1,0 +1,71 @@
+[build-system]
+requires = [
+    "setuptools>=42",
+    "wheel",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quantlib"
+description = "A library to explore QNNs"
+version = '0.2.0'
+readme = "README.md"
+requires-python = ">=3.7"
+authors = [
+    {name = "Matteo Spallanzani", email = "spmatteo@iis.ee.ethz.ch"},
+    {name = "Philip Wiese", email = "wiesep@iis.ee.ethz.ch"},
+    {name = "Moritz Scherer", email = "scheremo@iis.ee.ethz.ch"},
+]
+dependencies = [
+    "torch",
+    "networkx",
+    "graphviz",
+    "onnx",
+    "scipy",
+]
+
+[tool.setuptools]
+packages = ['quantlib']
+
+[tool.yapf]
+based_on_style = "google"
+column_limit = 120
+split_before_logical_operator = true
+spaces_around_default_or_named_assign = true
+
+[tool.autoflake]
+# return error code if changes are needed
+check = false
+# make changes to files instead of printing diffs
+in-place = true
+# drill down directories recursively
+recursive = true
+# exclude file/directory names that match these comma-separated globs
+# exclude = []
+# by default, only unused standard library imports are removed; specify a comma-separated list of additional
+# modules/packages
+# imports = "<IMPORTS>"
+# expand wildcard star imports with undefined names; this only triggers if there is only one star import in
+# the file; this is skipped if there are any uses of `__all__` or `del` in the file
+expand-star-imports = true
+# remove all unused imports (not just those from the standard library)
+remove-all-unused-imports = true
+# exclude __init__.py when removing unused imports
+ignore-init-module-imports = true
+# remove all duplicate keys in objects
+remove-duplicate-keys = true
+# remove unused variables
+remove-unused-variables = true
+
+[tool.isort]
+line_length = 120
+multi_line_output = 3
+lines_between_types = 1
+force_grid_wrap = 2
+group_by_package = true
+ensure_newline_before_comments = true
+include_trailing_comma = true
+skip_gitignore = true
+# skip_glob = []
+# known_first_party = []
+known_local_folder = ["quantlib"]
