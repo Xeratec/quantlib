@@ -422,6 +422,15 @@ class _PACTActivation(nn.Module):
             self.truemin          = torch.nn.Parameter(torch.Tensor((min_init,)), requires_grad=False)
             self.register_buffer('ready', torch.tensor(False))
 
+
+    def resetHistogram(self):
+        if self.init_clip == "percentile":
+            self.histogram[:] = torch.zeros_like(self.histogram)
+            self.prevEdges[:] = torch.zeros_like(self.prevEdges)
+            self.truemax[:] = 1
+            min_init = -1. if self.signed else 0.
+            self.truemin[:] = min_init
+
     # SCHEREMO: Assume self.histogram magnitude list of data, binned
     def updateHistogram(self, stat):
         if self.init_clip != "percentile":
@@ -546,6 +555,14 @@ class _PACTActivation(nn.Module):
                 result = PACTQuantize(x, eps, self.clip_lo, clip_upper, floor=(not self.rounding), clip_gradient=self.clip_gradient, noisy=self.noisy)
             if isinstance(result, QTensor):
                 result.eps = eps
+
+            # WIESEP: Propagate -inf values
+            result[x == torch.finfo(x.dtype).min] = -torch.inf
+
+            x_stat = torch.tensor(result, device=self.max.device, dtype=self.max.dtype) if not isinstance(result, torch.Tensor) else result
+            # import IPython; IPython.embed()
+
+            self.updateHistogram(x_stat)
             return result
 
 
