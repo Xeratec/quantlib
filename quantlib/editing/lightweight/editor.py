@@ -1,23 +1,23 @@
-# 
+#
 # editor.py
-# 
+#
 # Author(s):
 # Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
-# 
+#
 # Copyright (c) 2020-2021 ETH Zurich.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 # http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# 
+#
 
 from collections import namedtuple
 
@@ -25,7 +25,6 @@ from .graph import LightweightGraph
 from .rules import LightweightRule
 
 from typing import Union
-
 
 Commit = namedtuple('Commit', ['rho', 'applications'])
 
@@ -60,10 +59,11 @@ class History(object):
 
         return next_commit
 
-    def clear(self, force=False):
+    def clear(self, force = False):
 
         if not force:
-            confirmation = input("This action is not reversible. Are you sure that you want to delete all the history? [yes/NO]")
+            confirmation = input(
+                "This action is not reversible. Are you sure that you want to delete all the history? [yes/NO]")
             force = confirmation.lower() == 'yes'
 
         if force:
@@ -77,9 +77,9 @@ class LightweightEditor(object):
 
         self._graph = graph
 
-        self._history    = History()
+        self._history = History()
         self._in_session = False  # put a lock on the history by preventing editing actions
-        self._rho        = None   # current ``LightweightRule``
+        self._rho = None  # current ``LightweightRule``
 
     @property
     def graph(self) -> LightweightGraph:
@@ -96,7 +96,7 @@ class LightweightEditor(object):
 
     def shutdown(self):
         self._in_session = False
-        self._history.clear(force=True)
+        self._history.clear(force = True)
 
     def set_lwr(self, rho: LightweightRule) -> None:
 
@@ -109,12 +109,12 @@ class LightweightEditor(object):
 
         if self._in_session:
             try:
-                rule = self._rho
+                self._rho
             except AttributeError:
                 print("Rule not set: define a rule before issuing a graph editing instruction.")
                 return
             applications = self._rho.apply(self._graph)
-            commit = Commit(rho=self._rho, applications=applications)
+            commit = Commit(rho = self._rho, applications = applications)
             self._history.push(commit)
 
         else:
@@ -127,7 +127,8 @@ class LightweightEditor(object):
             for commit_id in range(0, n):
                 last_commit = self._history.undo()
                 if last_commit is None:
-                    print("I tried to unapply {} commits, but history contained just {}: interrupting instruction.".format(n, commit_id))
+                    print("I tried to unapply {} commits, but history contained just {}: interrupting instruction.".
+                          format(n, commit_id))
                     break
                 else:
                     last_commit.rho.unapply(self._graph, last_commit.applications)
@@ -141,11 +142,11 @@ class LightweightEditor(object):
             for commit_id in range(0, n):
                 next_commit = self._history.redo()
                 if next_commit is None:
-                    print("I tried to reapply {} commits, but history contained just {}: interrupting instruction.".format(n, commit_id))
+                    print("I tried to reapply {} commits, but history contained just {}: interrupting instruction.".
+                          format(n, commit_id))
                     break
                 else:
                     next_commit.rho.apply(self._graph)
 
         else:
             print("Graph editing denied: {} object is non in an editing session.".format(self.__class__.__name__))
-

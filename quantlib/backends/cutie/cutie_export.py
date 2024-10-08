@@ -23,7 +23,6 @@ import os
 
 import torch
 from torch import nn
-from torch.nn import Hardtanh
 from torch.nn import BatchNorm1d, BatchNorm2d
 from torch.nn import AvgPool1d, AvgPool2d, MaxPool1d, MaxPool2d, AdaptiveAvgPool2d, AdaptiveMaxPool2d
 from torch.nn import Conv1d, Conv2d
@@ -34,15 +33,12 @@ from quantlib.algorithms.inq import INQConv1d, INQConv2d, INQCausalConv1d, INQLi
 from quantlib.algorithms.ste import STEActivation
 from quantlib.QTensor import QTensor
 
-import quantlib.editing.lightweight as qlw
 from quantlib.editing.lightweight.rules import LightweightRule as lwr
 from quantlib.editing.lightweight import LightweightGraph as lwg
-
 
 import numpy as np
 import json
 from pathlib import Path
-
 
 Thresholds = namedtuple('Thresholds', 'lo hi')
 
@@ -56,17 +52,24 @@ act_types = pact_act_types + ste_act_types
 maxpool_types = [MaxPool1d, MaxPool2d, AdaptiveMaxPool2d]
 maxpool_2d = [MaxPool2d]
 adaptive_pool_types = [AdaptiveAvgPool2d, AdaptiveMaxPool2d]
-avgpool_types = [AvgPool1d, AvgPool2d, AdaptiveAvgPool2d] # don't support adaptiveavgpool1d for now.
+avgpool_types = [AvgPool1d, AvgPool2d, AdaptiveAvgPool2d]  # don't support adaptiveavgpool1d for now.
 avgpool_2d = [AvgPool2d]
 pool_types = maxpool_types + avgpool_types
 pool_types_2d = maxpool_2d + avgpool_2d
 
+
 class TernaryActivation(nn.Module):
-    def __init__(self, thresh_lo : torch.Tensor, thresh_hi : torch.Tensor, n_d : int, dbg : bool = False, cutie_style_threshs : bool = False):
+
+    def __init__(self,
+                 thresh_lo: torch.Tensor,
+                 thresh_hi: torch.Tensor,
+                 n_d: int,
+                 dbg: bool = False,
+                 cutie_style_threshs: bool = False):
         super(TernaryActivation, self).__init__()
         assert torch.sum(thresh_lo % 1) == 0, "thresh_lo is not integer!"
         assert torch.sum(thresh_hi % 1) == 0, "thresh_hi is not integer!"
-        assert n_d in (1,2), "Only 1D, 2D supported"
+        assert n_d in (1, 2), "Only 1D, 2D supported"
         thresh_lo = torch.unsqueeze(thresh_lo, 0)
         thresh_lo = torch.unsqueeze(thresh_lo, 2)
         thresh_hi = torch.unsqueeze(thresh_hi, 0)
@@ -75,8 +78,8 @@ class TernaryActivation(nn.Module):
             thresh_lo = torch.unsqueeze(thresh_lo, 3)
             thresh_hi = torch.unsqueeze(thresh_hi, 3)
 
-        self.thresh_lo = nn.Parameter(thresh_lo.clone().detach(), requires_grad=False)
-        self.thresh_hi = nn.Parameter(thresh_hi.clone().detach(), requires_grad=False)
+        self.thresh_lo = nn.Parameter(thresh_lo.clone().detach(), requires_grad = False)
+        self.thresh_hi = nn.Parameter(thresh_hi.clone().detach(), requires_grad = False)
         self.cutie_threshs = cutie_style_threshs
         self.dbg = dbg
         self.eps = 1e-4
@@ -87,15 +90,16 @@ class TernaryActivation(nn.Module):
             assert torch.sum(x - x.round()) < self.eps, "x is not integer in TernaryAct.forward()!"
         out = torch.ones_like(x)
         # assume NCHW tensors
-        out[x<self.thresh_lo] = -1
+        out[x < self.thresh_lo] = -1
         # CUTIE hardware uses greater-than thresholding rather than greater-or-equal
         if self.cutie_threshs:
-            out[torch.logical_and(x>=self.thresh_lo, x<=self.thresh_hi)] = 0
+            out[torch.logical_and(x >= self.thresh_lo, x <= self.thresh_hi)] = 0
         else:
-            out[torch.logical_and(x>=self.thresh_lo, x<self.thresh_hi)] = 0
+            out[torch.logical_and(x >= self.thresh_lo, x < self.thresh_hi)] = 0
         if isinstance(out, QTensor):
             out.eps = 1.
         return out
+
 
 def expand_kernel(module):
     # expand kernel of a module
@@ -106,7 +110,8 @@ def expand_kernel(module):
         k = (k,) * n_dims
     return k
 
-def get_threshs(nodes, prev_nodes, adaptive_kernel=None, cutie_style_threshs=False, first_layer=True):
+
+def get_threshs(nodes, prev_nodes, adaptive_kernel = None, cutie_style_threshs = False, first_layer = True):
     # returns a Thresholds tuple for a sequence of nodes:
     # nodes[0] must be a conv node
     # nodes[1] must be a BatchNorm node or an Pool node
@@ -166,20 +171,19 @@ def get_threshs(nodes, prev_nodes, adaptive_kernel=None, cutie_style_threshs=Fal
         elif isinstance(conv_node, tuple(inq_linear_types)):
             weights_to_sum = conv_node.weight_frozen
     else:
-        weights_to_sum = torch.zeros(conv_node.out_channels,1,1)
+        weights_to_sum = torch.zeros(conv_node.out_channels, 1, 1)
 
-    if len(weights_to_sum.shape)==4:
-        dims_to_sum = (1,2,3)
+    if len(weights_to_sum.shape) == 4:
+        dims_to_sum = (1, 2, 3)
     else:
-        dims_to_sum = (1,2)
+        dims_to_sum = (1, 2)
 
-    bias_add = weights_to_sum.sum(dim=dims_to_sum)
+    bias_add = weights_to_sum.sum(dim = dims_to_sum)
     bias_add *= torch.tensor(prev_act_eps * eps_w).squeeze()
     bias_hat = bias + bias_add
 
-
-    beta_hat = (bias_hat - bn_node.running_mean.data)/torch.sqrt(bn_node.running_var.data+bn_node.eps)
-    gamma_hat = 1/torch.sqrt(bn_node.running_var.data+bn_node.eps)
+    beta_hat = (bias_hat - bn_node.running_mean.data) / torch.sqrt(bn_node.running_var.data + bn_node.eps)
+    gamma_hat = 1 / torch.sqrt(bn_node.running_var.data + bn_node.eps)
     if bn_node.affine:
         beta_hat *= bn_node.weight.data
         beta_hat += bn_node.bias.data
@@ -190,10 +194,10 @@ def get_threshs(nodes, prev_nodes, adaptive_kernel=None, cutie_style_threshs=Fal
             pool_k = adaptive_kernel
         else:
             pool_k = expand_kernel(pool_node)
-        gamma_hat *= 1.0/torch.prod(torch.tensor(pool_k, dtype=gamma_hat.dtype))
+        gamma_hat *= 1.0 / torch.prod(torch.tensor(pool_k, dtype = gamma_hat.dtype))
 
-    thresh_lo = ((-0.5 + unsigned_indicator)*eps_act-beta_hat)/(gamma_hat*eps_w)
-    thresh_hi = ((0.5 + unsigned_indicator)*eps_act-beta_hat)/(gamma_hat*eps_w)
+    thresh_lo = ((-0.5 + unsigned_indicator) * eps_act - beta_hat) / (gamma_hat * eps_w)
+    thresh_hi = ((0.5 + unsigned_indicator) * eps_act - beta_hat) / (gamma_hat * eps_w)
     thresh_lo /= prev_act_eps
     thresh_hi /= prev_act_eps
     # if some gamma_hats/gammas are negative, the smaller than/larger than relationships are flipped there.
@@ -218,13 +222,13 @@ def get_threshs(nodes, prev_nodes, adaptive_kernel=None, cutie_style_threshs=Fal
     if cutie_style_threshs:
         thresh_hi = thresh_hi - 1
 
-
-
     return Thresholds(thresh_lo, thresh_hi)
+
 
 def node_is_in(n, types):
     n_is_inst = lambda x: isinstance(n.module, x)
     return any(map(n_is_inst, types))
+
 
 def get_node_sequences(nodes):
     # returns a list of sequences of nodes like l from a list of nodes
@@ -243,12 +247,13 @@ def get_node_sequences(nodes):
     out = []
     for i, n in enumerate(nodes):
         try:
-            if i < len(nodes)-1:
+            if i < len(nodes) - 1:
                 if node_is_in(n, linear_types):
-                    if node_is_in(nodes[i+1], bn_types) and node_is_in(nodes[i+2], act_types):
-                        out.append(nodes[i:i+3])
-                    elif node_is_in(nodes[i+1], pool_types+bn_types) and node_is_in(nodes[i+2], bn_types+pool_types) and node_is_in(nodes[i+3], act_types):
-                        out.append(nodes[i:i+4])
+                    if node_is_in(nodes[i + 1], bn_types) and node_is_in(nodes[i + 2], act_types):
+                        out.append(nodes[i:i + 3])
+                    elif node_is_in(nodes[i + 1], pool_types + bn_types) and node_is_in(
+                            nodes[i + 2], bn_types + pool_types) and node_is_in(nodes[i + 3], act_types):
+                        out.append(nodes[i:i + 4])
             else:
                 # we assume that the last layer of the network is a linear classifier
                 if node_is_in(n, linear_types):
@@ -257,7 +262,8 @@ def get_node_sequences(nodes):
             break
     return out
 
-def convert_net(net, in_size : torch.Tensor, dbg=False, cutie_style_threshs=False):
+
+def convert_net(net, in_size: torch.Tensor, dbg = False, cutie_style_threshs = False):
     # takes a quantized TNN using HTanH activations (must be left in the net)
     net.cpu()
     net_nodes = lwg.build_nodes_list(net)
@@ -267,14 +273,15 @@ def convert_net(net, in_size : torch.Tensor, dbg=False, cutie_style_threshs=Fals
     prev_s = None
     for l_idx, s in enumerate(node_sequences):
         conv_node = s[0]
-        n_d = int(conv_node.module.__class__.__name__[-2]) # should be 1 or 2
-        assert n_d in [1,2], "Unexpected class - expected Conv1d/Conv2d, got {}".format(conv_node.module.__class__.__name__)
+        n_d = int(conv_node.module.__class__.__name__[-2])  # should be 1 or 2
+        assert n_d in [1, 2
+                      ], "Unexpected class - expected Conv1d/Conv2d, got {}".format(conv_node.module.__class__.__name__)
         # we need to provide an adaptive_kernel argument to get_threshs.. this is kinda ugly
         adaptive_kernel = None
-        size = torch.div(size, torch.tensor(conv_node.module.stride), rounding_mode='trunc')
+        size = torch.div(size, torch.tensor(conv_node.module.stride), rounding_mode = 'trunc')
 
         # This processes the last linear classification module and returns the final network and argmax offsets
-        if l_idx == len(node_sequences)-1:
+        if l_idx == len(node_sequences) - 1:
             # we assume that the last layer of the network is a linear classifier
             # in that case, just convert the weights to ternary, from {-eps_w,
             # 0, eps_w} to {-1, 0, 1}
@@ -294,9 +301,8 @@ def convert_net(net, in_size : torch.Tensor, dbg=False, cutie_style_threshs=Fals
             else:
                 bias = torch.zeros(conv_node.module.out_channels)
 
-
-            weights_sum = weights_to_sum.sum(dim=(1,2))
-            argmax_offsets = bias/(prev_activation_eps*eps_w.reshape((-1)))
+            weights_sum = weights_to_sum.sum(dim = (1, 2))
+            argmax_offsets = bias / (prev_activation_eps * eps_w.reshape((-1)))
             if isinstance(prev_s[-1].module, PACTUnsignedAct):
                 argmax_offsets += weights_sum
                 if conv_node.module.padding_mode in ['eps', 'ones']:
@@ -305,7 +311,7 @@ def convert_net(net, in_size : torch.Tensor, dbg=False, cutie_style_threshs=Fals
                     # anything anyway but just to be safe
                     conv_node.module.padding_mode = 'zeros'
                 else:
-                        # if we did zero padding, we use -1 to pad
+                    # if we did zero padding, we use -1 to pad
                     conv_node.module.padding_mode = 'neg_ones'
             if isinstance(conv_node.module, _PACTLinOp):
                 conv_node.module.weight = torch.nn.Parameter(conv_node.module.weight_int)
@@ -316,13 +322,11 @@ def convert_net(net, in_size : torch.Tensor, dbg=False, cutie_style_threshs=Fals
             else:
                 assert False, f"Classifier of unknown class {type(conv_node.module)}"
 
-
             conv_node.module.bias = None
-
 
             # .. and we are done - move back to GPU!
             dev = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-            net.to(device=dev)
+            net.to(device = dev)
             return net, argmax_offsets, eps_w
 
         if len(s) == 4:
@@ -332,13 +336,13 @@ def convert_net(net, in_size : torch.Tensor, dbg=False, cutie_style_threshs=Fals
             pool_node, bn_node = (s[1], s[2]) if node_is_in(s[1], pool_types) else (s[2], s[1])
             if node_is_in(pool_node, adaptive_pool_types):
                 adaptive_pool = True
-                adaptive_kernel = size/torch.tensor(pool_node.module.output_size)
+                adaptive_kernel = size / torch.tensor(pool_node.module.output_size)
                 adaptive_kernel = tuple(el.item() for el in adaptive_kernel.int())
                 size = torch.tensor(pool_node.module.output_size)
                 pool_node.kernel_size = adaptive_kernel
             else:
                 adaptive_pool = False
-                size = torch.div(size, torch.tensor(pool_node.module.stride), rounding_mode='trunc')
+                size = torch.div(size, torch.tensor(pool_node.module.stride), rounding_mode = 'trunc')
             i = 1
 
             if node_is_in(pool_node, avgpool_types):
@@ -355,7 +359,7 @@ def convert_net(net, in_size : torch.Tensor, dbg=False, cutie_style_threshs=Fals
         # for channels where the BN gamma is negative, the weights need to be
         # flipped
         if bn_node.module.affine:
-            flip_weights = bn_node.module.weight.data < 0 # flip the weights where gamma is negative
+            flip_weights = bn_node.module.weight.data < 0  # flip the weights where gamma is negative
             with torch.no_grad():
                 conv_node.module.weight[flip_weights, ...] *= -1
 
@@ -374,7 +378,12 @@ def convert_net(net, in_size : torch.Tensor, dbg=False, cutie_style_threshs=Fals
                 conv_cls = Conv2d
             else:
                 assert False, "Weird: avgpool is True but pool_node is neither avgpool1d nor avgpool2d..."
-            pool_conv = conv_cls(n_chans, n_chans, kernel_size=pool_k, stride=pool_k, groups=n_chans, bias=False)
+            pool_conv = conv_cls(n_chans,
+                                 n_chans,
+                                 kernel_size = pool_k,
+                                 stride = pool_k,
+                                 groups = n_chans,
+                                 bias = False)
             pool_conv.weight.data = torch.ones_like(pool_conv.weight.data)
             pool_conv.weight.needs_grad = False
             pool_conv.is_avgpool = True
@@ -385,9 +394,13 @@ def convert_net(net, in_size : torch.Tensor, dbg=False, cutie_style_threshs=Fals
         # - BN becomes identity
         lwr.replace_module(net, bn_node.path, Identity())
         # - Replace activation with the correct thresholds
-        act_node = s[i+2]
-        threshs = get_threshs(s, prev_s, adaptive_kernel, cutie_style_threshs, first_layer=(l_idx==0))
-        tern_act = TernaryActivation(threshs.lo, threshs.hi, n_d=n_d, dbg=dbg, cutie_style_threshs=cutie_style_threshs)
+        act_node = s[i + 2]
+        threshs = get_threshs(s, prev_s, adaptive_kernel, cutie_style_threshs, first_layer = (l_idx == 0))
+        tern_act = TernaryActivation(threshs.lo,
+                                     threshs.hi,
+                                     n_d = n_d,
+                                     dbg = dbg,
+                                     cutie_style_threshs = cutie_style_threshs)
         lwr.replace_module(net, act_node.path, tern_act)
         # - Convolution weights are converted from {-eps_w, 0, eps_w} to {-1,
         # - 0, 1}
@@ -403,39 +416,42 @@ def convert_net(net, in_size : torch.Tensor, dbg=False, cutie_style_threshs=Fals
         # using unsigned activations
         # 'zeros' enables padding with 0, 'neg_ones' enables padding with -1.
         # when using eps padding, we don't need to do this.
-        if l_idx>0 and isinstance(prev_s[-1].module, PACTUnsignedAct)  and conv_node.module.padding_mode not in ['eps', 'ones']:
+        if l_idx > 0 and isinstance(prev_s[-1].module,
+                                    PACTUnsignedAct) and conv_node.module.padding_mode not in ['eps', 'ones']:
             conv_node.module.padding_mode = 'neg_ones'
             print("===========WARNING!!!===========")
-            print(f"Layer {conv_node.name}'s padding mode is set to {conv_node.module.padding_mode} but we are using unsigned activations - CUTIE can not handle anything but zero-padding so the mapped network will have bad accuracy! Use the 'eps' (for non-unit quantization step sizes) or 'ones' (with unit quantization step size) or  padding modes to avoid this! Setting padding mode to 'neg_ones' so the resulting network is equivalent to the fake-quantized one.")
+            print(
+                f"Layer {conv_node.name}'s padding mode is set to {conv_node.module.padding_mode} but we are using unsigned activations - CUTIE can not handle anything but zero-padding so the mapped network will have bad accuracy! Use the 'eps' (for non-unit quantization step sizes) or 'ones' (with unit quantization step size) or  padding modes to avoid this! Setting padding mode to 'neg_ones' so the resulting network is equivalent to the fake-quantized one."
+            )
         else:
             conv_node.module.padding_mode = 'zeros'
-        conv_node.module.bias = None # note: not sure if this the correct way to do
+        conv_node.module.bias = None  # note: not sure if this the correct way to do
         prev_s = s
 
-def export_data(data, out_fn, mode, split=1,stride=0):
+
+def export_data(data, out_fn, mode, split = 1, stride = 0):
     split_dim = 1 if len(data.shape) == 4 else 0
     if mode == 'complete':
         # export the whole tensor as is
         np.save(f'{out_fn}', data.squeeze().numpy())
     elif mode == 'split':
-        d_split = torch.split(data, split, dim=split_dim)
+        d_split = torch.split(data, split, dim = split_dim)
         for i, d in enumerate(d_split):
             np.save(f'{out_fn}_{i}', d.squeeze().numpy())
     # save only unique frames (need to provide)
     elif mode == 'cat':
-        d_split = torch.split(data, split, dim=split_dim)
+        d_split = torch.split(data, split, dim = split_dim)
         inp = d_split[0]
         for i in d_split[1:]:
             if split_dim:
-                inp = torch.cat((inp, i[:, -stride:,...]), dim=split_dim)
+                inp = torch.cat((inp, i[:, -stride:, ...]), dim = split_dim)
             else:
-                inp = torch.cat((inp, i[-stride:,...]), dim=split_dim)
+                inp = torch.cat((inp, i[-stride:, ...]), dim = split_dim)
         np.save(f'{out_fn}', inp.squeeze().numpy())
 
 
-
-def export_net(net, export_path, data, name, subnet=None, split_input=None):
-    Path(export_path).mkdir(parents=True, exist_ok=True)
+def export_net(net, export_path, data, name, subnet = None, split_input = None):
+    Path(export_path).mkdir(parents = True, exist_ok = True)
     if subnet is not None:
         exp_net = getattr(net, subnet)
     else:
@@ -455,7 +471,6 @@ def export_net(net, export_path, data, name, subnet=None, split_input=None):
 
         n = os.path.join(export_path, n)
         return n
-
 
     if split_input is not None:
         export_data(data, make_file_name('input'), 'split', split_input)
@@ -483,7 +498,7 @@ def export_net(net, export_path, data, name, subnet=None, split_input=None):
             export_threshs(act_module)
         config_name = make_file_name('config')
         with open(config_name, 'w') as fp:
-            json.dump(l_dict, fp, indent=4)
+            json.dump(l_dict, fp, indent = 4)
 
     def unpack_tuple(t):
         if len(t) == 1:
@@ -499,7 +514,7 @@ def export_net(net, export_path, data, name, subnet=None, split_input=None):
                 is_avgpool = False
             if is_avgpool:
                 k = expand_kernel(m)
-                if k in ((1,1), (1,)):
+                if k in ((1, 1), (1,)):
                     # this is a "pool_conv" layer which we throw away because it
                     # does not do anything
                     continue
@@ -508,14 +523,14 @@ def export_net(net, export_path, data, name, subnet=None, split_input=None):
                 layer_dict['pooling'] = True
             else:
                 layer_dict['conv_type'] = m.__class__.__name__[-2:]
-                layer_dict['conv_stride'] = unpack_tuple(m.stride) # this can bite us...
+                layer_dict['conv_stride'] = unpack_tuple(m.stride)  # this can bite us...
                 layer_dict['pooling'] = False
                 layer_dict['conv_in_ch'] = m.in_channels
                 layer_dict['conv_out_ch'] = m.out_channels
                 layer_dict['fp_out'] = True
                 layer_dict['conv_k'] = unpack_tuple(m.kernel_size)
                 if not isinstance(m, INQCausalConv1d):
-                    layer_dict['conv_padding'] = unpack_tuple(m.padding) # this can bite us...
+                    layer_dict['conv_padding'] = unpack_tuple(m.padding)  # this can bite us...
                 else:
                     layer_dict['conv_padding'] = "causal"
 

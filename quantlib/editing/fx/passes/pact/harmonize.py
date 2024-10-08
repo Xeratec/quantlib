@@ -28,13 +28,12 @@ import copy
 from copy import deepcopy
 import torch
 from torch import nn, fx
-from torch.fx.graph_module import GraphModule
 from torch.fx.subgraph_rewriter import Match
 
 from quantlib.algorithms.pact.pact_ops import *
 from quantlib.algorithms.generic.generic_ops import *
 from quantlib.algorithms.pact.pact_functions import AlmostSymmQuantFunc
-from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass, InsertModuleAfterNodePass,ReplaceSequentialPatternPass, AnnotateEpsPass
+from .. import FxPass, SequentialPass, InsertModuleBetweenModulesPass, InsertModuleAfterNodePass, ReplaceSequentialPatternPass, AnnotateEpsPass
 from .. import RetracePass, ModularizePass
 from ...util import gm_modules, module_of_node
 from ...util.tracing import LeafTracer, custom_symbolic_trace
@@ -44,20 +43,20 @@ from .pact_util import PACT_OPS, PACT_OPS_INCLUSIVE, PACT_symbolic_trace
 
 class OpTree:
 
-    def __init__(self, end_node : fx.Node):
+    def __init__(self, end_node: fx.Node):
         self.end_node = end_node
         self.nodes = [end_node]
         self.open_branches = len(end_node.all_input_nodes)
         assert self.open_branches > 0, "Tried to create OpTree with no branches - something is wrong!"
         # assume that order and assignment of args and kwargs does not matter
         # and they are all treated the same.
-        self._args = list(end_node._args) #+ [v for v in end_node.kwargs.values()]
+        self._args = list(end_node._args)  #+ [v for v in end_node.kwargs.values()]
         self.kwargs = end_node.kwargs
         # note the users of the final node now - it may get
         # deleted and then end_node.users becomes useless
         self.users = [u for u in end_node.users]
 
-    def add_node(self, node : fx.Node):
+    def add_node(self, node: fx.Node):
         assert node not in self.nodes, "OpTree.add_node(): something went wrong: you tried to add the same node to a tree twice..."
         assert not self.is_terminated, "Tried to add a node to a terminated tree!"
         self.nodes.append(node)
@@ -81,7 +80,8 @@ class OpTree:
         # tree, except those inputs which are tree nodes themselves.
 
         #SCHEREMO : This was some heavy monkey coding right here -- Why would you cast kwargs to their values? They could be reordered or whatever else!!!
-        all_args = [arg for node in self.nodes for arg in node._input_nodes.keys() if arg not in self.nodes] #+ [v for node in self.nodes for v in node.kwargs.values() if v not in self.nodes]
+        all_args = [arg for node in self.nodes for arg in node._input_nodes.keys() if arg not in self.nodes
+                   ]  #+ [v for node in self.nodes for v in node.kwargs.values() if v not in self.nodes]
         # in the case of concat nodes, the arguments are lists or tuples, so we
         # unpack them
         all_args_unpacked = []
@@ -92,9 +92,10 @@ class OpTree:
                 all_args_unpacked.append(arg)
         return tuple(all_args_unpacked)
 
+
 class OpTreeReplacementPass(FxPass):
 
-    def __init__(self, node_specs : list, replacement_fn : callable, name : str = '', always_terminate : bool = False):
+    def __init__(self, node_specs: list, replacement_fn: callable, name: str = '', always_terminate: bool = False):
         super(OpTreeReplacementPass, self).__init__()
         self.node_specs = node_specs
         self.replacement_fn = replacement_fn
@@ -102,11 +103,16 @@ class OpTreeReplacementPass(FxPass):
         self.always_terminate = always_terminate
 
     @staticmethod
-    def node_matches_spec(node : fx.Node, node_spec : tuple):
+    def node_matches_spec(node: fx.Node, node_spec: tuple):
         return node.op == node_spec[0] and node.target in node_spec[1]
 
     @staticmethod
-    def trace_op_trees(node : fx.Node, node_specs : list, cur_tree : Union[None, OpTree], op_trees : list, seen_nodes : set, always_terminate : bool = False):
+    def trace_op_trees(node: fx.Node,
+                       node_specs: list,
+                       cur_tree: Union[None, OpTree],
+                       op_trees: list,
+                       seen_nodes: set,
+                       always_terminate: bool = False):
         if node in seen_nodes:
             # if we have already seen this node, it is either already part of a
             # tree or it will never be, so if we exited a tree, terminate the
@@ -124,9 +130,9 @@ class OpTreeReplacementPass(FxPass):
                 cur_tree.terminate_branch()
                 if cur_tree.is_terminated:
                     op_trees.append(cur_tree)
-                cur_tree = OpTree(end_node=node)
+                cur_tree = OpTree(end_node = node)
             elif cur_tree is None:
-                cur_tree = OpTree(end_node=node)
+                cur_tree = OpTree(end_node = node)
             else:
                 cur_tree.add_node(node)
         elif cur_tree is not None:
@@ -140,8 +146,7 @@ class OpTreeReplacementPass(FxPass):
         for inp in node.all_input_nodes:
             OpTreeReplacementPass.trace_op_trees(inp, node_specs, cur_tree, op_trees, seen_nodes, always_terminate)
 
-
-    def run_pass(self, gm : fx.GraphModule):
+    def run_pass(self, gm: fx.GraphModule):
         out_node = list(gm.graph.nodes)[-1]
         op_trees = []
         self.trace_op_trees(out_node, self.node_specs, None, op_trees, set(), self.always_terminate)
@@ -155,7 +160,7 @@ class OpTreeReplacementPass(FxPass):
                 gm.add_submodule(new_target, module)
                 # add a node for the submodule call
                 with gm.graph.inserting_before(tree.end_node):
-                    new_node = gm.graph.call_module(new_target, args=tree.args)
+                    new_node = gm.graph.call_module(new_target, args = tree.args)
                 # attach the module to the previous users of the tree's end node
                 tree.end_node.replace_all_uses_with(new_node)
                 #TODO add possibility to modify this as the pass is run - for
@@ -171,16 +176,21 @@ class OpTreeReplacementPass(FxPass):
         # and we're done...
         return gm
 
+
 class TruedivReplacementPass(ModularizePass):
 
     @staticmethod
     def truediv_replacement_fn(node, Delta):
-        return (PACTDiv(Delta, stable=False, autoscale=False), node.args, node.kwargs)
+        return (PACTDiv(Delta, stable = False, autoscale = False), node.args, node.kwargs)
 
-    def __init__(self, Delta=2**8, **kwargs):
+    def __init__(self, Delta = 2**8, **kwargs):
         self.kwargs = kwargs
         target = [operator.truediv]
-        super().__init__(op='call_function', target=tuple(target), replacement_fn = partial(self.truediv_replacement_fn, Delta=Delta), name="DIV_REPLACEMENT_PASS")
+        super().__init__(op = 'call_function',
+                         target = tuple(target),
+                         replacement_fn = partial(self.truediv_replacement_fn, Delta = Delta),
+                         name = "DIV_REPLACEMENT_PASS")
+
 
 class MeanFunctionReplacementPass(ModularizePass):
 
@@ -191,7 +201,11 @@ class MeanFunctionReplacementPass(ModularizePass):
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         target = [torch.mean]
-        super().__init__(op='call_function', target=tuple(target), replacement_fn = partial(self.mean_replacement_fn), name="MEAN_REPLACEMENT_PASS")
+        super().__init__(op = 'call_function',
+                         target = tuple(target),
+                         replacement_fn = partial(self.mean_replacement_fn),
+                         name = "MEAN_REPLACEMENT_PASS")
+
 
 class MeanMethodReplacementPass(ModularizePass):
 
@@ -202,7 +216,11 @@ class MeanMethodReplacementPass(ModularizePass):
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         target = ['mean']
-        super().__init__(op='call_method', target=tuple(target), replacement_fn = partial(self.mean_replacement_fn), name="MEAN_REPLACEMENT_PASS")
+        super().__init__(op = 'call_method',
+                         target = tuple(target),
+                         replacement_fn = partial(self.mean_replacement_fn),
+                         name = "MEAN_REPLACEMENT_PASS")
+
 
 class MeanReplacementPass(SequentialPass):
 
@@ -210,7 +228,8 @@ class MeanReplacementPass(SequentialPass):
         passes = []
         passes.append(MeanMethodReplacementPass())
         passes.append(MeanFunctionReplacementPass())
-        super().__init__(*passes, name_prefix="_MEAN_REPLACEMENT_PASS")
+        super().__init__(*passes, name_prefix = "_MEAN_REPLACEMENT_PASS")
+
 
 class MatmulReplacementPass(ModularizePass):
 
@@ -221,22 +240,27 @@ class MatmulReplacementPass(ModularizePass):
     def __init__(self, **kwargs):
         self.kwargs = kwargs
         target = [torch.matmul]
-        super().__init__(op='call_function', target=tuple(target), replacement_fn = self.matmul_replacement_fn, name="MATMUL_REPLACEMENT_PASS")
+        super().__init__(op = 'call_function',
+                         target = tuple(target),
+                         replacement_fn = self.matmul_replacement_fn,
+                         name = "MATMUL_REPLACEMENT_PASS")
+
 
 class AddTreeReplacementPass(OpTreeReplacementPass):
-    add_node_specs = [('call_function', (torch.add, operator.add)),
-                      ('call_method', ('add',))]
+    add_node_specs = [('call_function', (torch.add, operator.add)), ('call_method', ('add',))]
 
-    def __init__(self, infer_sign : bool = False, infer_outact : bool = False, **kwargs):
+    def __init__(self, infer_sign: bool = False, infer_outact: bool = False, **kwargs):
         default_kwargs = {'learn_clip': True, 'init_clip': 'max', 'act_kind': 'identity', 'tqt': True}
         # overwrite defaults with supplied kwargs
         default_kwargs.update(kwargs)
         self.kwargs = default_kwargs
         self.infer_sign = infer_sign
         self.infer_outact = infer_outact
-        super(AddTreeReplacementPass, self).__init__(node_specs=self.add_node_specs, replacement_fn=self.add_replacement_fn, name="ADDITION")
+        super(AddTreeReplacementPass, self).__init__(node_specs = self.add_node_specs,
+                                                     replacement_fn = self.add_replacement_fn,
+                                                     name = "ADDITION")
 
-    def add_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
+    def add_replacement_fn(self, gm: fx.GraphModule, tree: OpTree):
         kwargs_to_pass = self.kwargs
         if self.infer_sign:
             signed_out = False
@@ -245,12 +269,14 @@ class AddTreeReplacementPass(OpTreeReplacementPass):
                 try:
                     signed.append(n.meta['quant'].signed_out)
                 except KeyError:
-                    import ipdb; ipdb.set_trace()
+                    import ipdb
+                    ipdb.set_trace()
                 signed_out = signed_out or signed[-1]
             signed.append(signed_out)
             kwargs_to_pass['signed'] = signed
         if self.infer_outact:
-            if len(tree.users) == 1 and isinstance(module_of_node(gm, tree.users[0]), (PACTUnsignedAct, PACTAsymmetricAct)):
+            if len(tree.users) == 1 and isinstance(module_of_node(gm, tree.users[0]),
+                                                   (PACTUnsignedAct, PACTAsymmetricAct)):
                 try:
                     n_levels = kwargs_to_pass['n_levels']
                 except KeyError:
@@ -261,19 +287,22 @@ class AddTreeReplacementPass(OpTreeReplacementPass):
                     n_levels[-1] = 0
                 kwargs_to_pass['n_levels'] = n_levels
 
+        return PACTIntegerAdd(num_args = len(tree.args), **kwargs_to_pass)
 
-        return PACTIntegerAdd(num_args=len(tree.args),  **kwargs_to_pass)
 
 class MulReplacementPass(OpTreeReplacementPass):
-    mul_node_specs = [('call_function', (torch.mul, operator.mul)),
-                      ('call_method', ('mul',))]
+    mul_node_specs = [('call_function', (torch.mul, operator.mul)), ('call_method', ('mul',))]
 
     def __init__(self):
-        super(MulReplacementPass, self).__init__(node_specs=self.mul_node_specs, replacement_fn=self.mul_replacement_fn, name="MULTIPLICATION", always_terminate=True)
+        super(MulReplacementPass, self).__init__(node_specs = self.mul_node_specs,
+                                                 replacement_fn = self.mul_replacement_fn,
+                                                 name = "MULTIPLICATION",
+                                                 always_terminate = True)
 
-    def mul_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
+    def mul_replacement_fn(self, gm: fx.GraphModule, tree: OpTree):
         # multiply takes no args
         return Multiply()
+
 
 class ConcatTreeReplacementPass(SequentialPass):
     cat_node_specs = [('call_function', (torch.cat,))]
@@ -285,50 +314,49 @@ class ConcatTreeReplacementPass(SequentialPass):
         default_kwargs.update(kwargs)
         self.kwargs = default_kwargs
         passes = []
-        passes.append(OpTreeReplacementPass(node_specs=self.cat_node_specs, replacement_fn=self.cat_replacement_fn, name="CONCAT", always_terminate=True))
-        passes.append(OpTreeReplacementPass(node_specs=self.stack_node_specs, replacement_fn=self.stack_replacement_fn, name="STACK", always_terminate=True))
-        super(ConcatTreeReplacementPass, self).__init__(*passes, name_prefix="_QL_REPLACE_CAT_STACK")
+        passes.append(
+            OpTreeReplacementPass(node_specs = self.cat_node_specs,
+                                  replacement_fn = self.cat_replacement_fn,
+                                  name = "CONCAT",
+                                  always_terminate = True))
+        passes.append(
+            OpTreeReplacementPass(node_specs = self.stack_node_specs,
+                                  replacement_fn = self.stack_replacement_fn,
+                                  name = "STACK",
+                                  always_terminate = True))
+        super(ConcatTreeReplacementPass, self).__init__(*passes, name_prefix = "_QL_REPLACE_CAT_STACK")
 
-    def cat_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
-        return PACTIntegerConcat(num_args=len(tree.args), **self.kwargs, stack_flag=False, **(tree.kwargs))
+    def cat_replacement_fn(self, gm: fx.GraphModule, tree: OpTree):
+        return PACTIntegerConcat(num_args = len(tree.args), **self.kwargs, stack_flag = False, **(tree.kwargs))
 
-    def stack_replacement_fn(self, gm : fx.GraphModule, tree : OpTree):
-        return PACTIntegerConcat(num_args=len(tree.args), **self.kwargs, stack_flag=True, **(tree.kwargs))
+    def stack_replacement_fn(self, gm: fx.GraphModule, tree: OpTree):
+        return PACTIntegerConcat(num_args = len(tree.args), **self.kwargs, stack_flag = True, **(tree.kwargs))
+
 
 class InsertActivationsBetweenLinearsPass(InsertModuleBetweenModulesPass):
-    before_modules = (nn.Conv1d,
-                      nn.Conv2d,
-                      nn.Conv3d,
-                      nn.BatchNorm1d,
-                      nn.BatchNorm2d,
-                      nn.BatchNorm3d,
-                      nn.Linear,
+    before_modules = (nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, nn.Linear,
                       Multiply)
-    after_modules = (nn.Conv1d,
-                     PACTIntegerMatmul,
-                     nn.Conv2d,
-                     nn.Conv3d,
-                     nn.Linear,
-                     Multiply)
+    after_modules = (nn.Conv1d, PACTIntegerMatmul, nn.Conv2d, nn.Conv3d, nn.Linear, Multiply)
 
-    def __init__(self, signed : bool = True, **kwargs):
+    def __init__(self, signed: bool = True, **kwargs):
         name = "PACT_LINEAR_ACTIVATIONS"
         self.signed = signed
-        default_kwargs = {'learn_clip' : True, 'tqt' : True, 'init_clip' : 'max', 'act_kind' : 'identity'}
+        default_kwargs = {'learn_clip': True, 'tqt': True, 'init_clip': 'max', 'act_kind': 'identity'}
         default_kwargs.update(kwargs)
         self.kwargs = default_kwargs
-        super(InsertActivationsBetweenLinearsPass, self).__init__(modules_before=self.before_modules,
-                                                                  modules_after=self.after_modules,
-                                                                  make_module_fn=self.inserted_module,
-                                                                  name=name,
-                                                                  combine='force')
+        super(InsertActivationsBetweenLinearsPass, self).__init__(modules_before = self.before_modules,
+                                                                  modules_after = self.after_modules,
+                                                                  make_module_fn = self.inserted_module,
+                                                                  name = name,
+                                                                  combine = 'force')
 
     def inserted_module(self, *args, **kwargs):
         if self.signed:
             return PACTAsymmetricAct(**self.kwargs)
         else:
-            module_kwargs = {k:v for k, v in self.kwargs.items() if k != "symm"}
+            module_kwargs = {k: v for k, v in self.kwargs.items() if k != "symm"}
             return PACTUnsignedAct(**module_kwargs)
+
 
 class InsertActivationsAfterLinearsPass(SequentialPass):
     before_modules = (
@@ -349,16 +377,16 @@ class InsertActivationsAfterLinearsPass(SequentialPass):
         PACTAsymmetricAct,
     )
 
-    def __init__(self, signed : bool = True, **kwargs):
+    def __init__(self, signed: bool = True, **kwargs):
         self.name = "PACT_LINEAR_ACTIVATIONS"
-        super(InsertActivationsAfterLinearsPass, self).__init__(name_prefix=self.name)
+        super(InsertActivationsAfterLinearsPass, self).__init__(name_prefix = self.name)
 
         self.signed = signed
-        default_kwargs = {'learn_clip' : True, 'tqt' : True, 'init_clip' : 'max', 'act_kind' : 'identity'}
+        default_kwargs = {'learn_clip': True, 'tqt': True, 'init_clip': 'max', 'act_kind': 'identity'}
         default_kwargs.update(kwargs)
         self.kwargs = default_kwargs
 
-    def retarget(self, gm : fx.GraphModule):
+    def retarget(self, gm: fx.GraphModule):
         for k in self.named_subpasses().keys():
             self.remove_subpass(k)
 
@@ -366,7 +394,11 @@ class InsertActivationsAfterLinearsPass(SequentialPass):
 
         modules = dict(gm.named_modules())
         output_node = list(gm.graph.nodes.__reversed__())[0]
-        node_list = self.find_unactivated_linops(output_node, modules, self.before_modules , self.activation_nodes, outputQuant=True)
+        node_list = self.find_unactivated_linops(output_node,
+                                                 modules,
+                                                 self.before_modules,
+                                                 self.activation_nodes,
+                                                 outputQuant = True)
 
         idx = 0
         for node in node_list:
@@ -375,17 +407,22 @@ class InsertActivationsAfterLinearsPass(SequentialPass):
                 passes.append(InsertModuleAfterNodePass(node, new_module, f"{self.name.upper()}_{idx}"))
                 idx += 1
 
-
         super(InsertActivationsAfterLinearsPass, self).setup_passes(passes)
 
-    def find_unactivated_linops(self, output_node: torch.fx.Node, modules: Dict[str, torch.nn.Module], linear_op_nodes: List[torch.nn.Module], act_nodes: List[torch.nn.Module], outputQuant: bool = False) -> List[torch.fx.Node]:
+    def find_unactivated_linops(self,
+                                output_node: torch.fx.Node,
+                                modules: Dict[str, torch.nn.Module],
+                                linear_op_nodes: List[torch.nn.Module],
+                                act_nodes: List[torch.nn.Module],
+                                outputQuant: bool = False) -> List[torch.fx.Node]:
 
         node = output_node
         linop_list = []
         offenders = []
 
         while node._prev != output_node:
-            if (node.target in modules.keys()) and any(isinstance(modules[node.target], pattern) for pattern in linear_op_nodes):
+            if (node.target in modules.keys()) and any(
+                    isinstance(modules[node.target], pattern) for pattern in linear_op_nodes):
                 linop_list.append(node)
             node = node._prev
 
@@ -395,17 +432,25 @@ class InsertActivationsAfterLinearsPass(SequentialPass):
 
         return offenders
 
-    def has_trailing_acts_or_output(self, node: torch.fx.Node, modules: Dict[str, torch.nn.Module], linear_op_nodes: List[torch.nn.Module], act_nodes: List[torch.nn.Module], outputQuant: bool = False) -> bool:
+    def has_trailing_acts_or_output(self,
+                                    node: torch.fx.Node,
+                                    modules: Dict[str, torch.nn.Module],
+                                    linear_op_nodes: List[torch.nn.Module],
+                                    act_nodes: List[torch.nn.Module],
+                                    outputQuant: bool = False) -> bool:
 
         nodeBool = True
 
         for output_node in node.users.keys():
-            if (outputQuant and output_node.op == 'output') or output_node.op == 'placeholder' or (output_node.target in modules.keys() and isinstance(modules[output_node.target], tuple(linear_op_nodes))):
+            if (outputQuant and output_node.op == 'output') or output_node.op == 'placeholder' or (
+                    output_node.target in modules.keys()
+                    and isinstance(modules[output_node.target], tuple(linear_op_nodes))):
                 return False
             elif (output_node.target in modules.keys()) and isinstance(modules[output_node.target], tuple(act_nodes)):
                 continue
             else:
-                nodeBool &= self.has_trailing_acts_or_output(output_node, modules, linear_op_nodes, act_nodes, outputQuant)
+                nodeBool &= self.has_trailing_acts_or_output(output_node, modules, linear_op_nodes, act_nodes,
+                                                             outputQuant)
 
         return nodeBool
 
@@ -413,63 +458,72 @@ class InsertActivationsAfterLinearsPass(SequentialPass):
         if self.signed:
             return PACTAsymmetricAct(**self.kwargs)
         else:
-            module_kwargs = {k:v for k, v in self.kwargs.items() if k != "symm"}
+            module_kwargs = {k: v for k, v in self.kwargs.items() if k != "symm"}
             return PACTUnsignedAct(**module_kwargs)
 
+
 class InsertBNBetweenBiasedConvAndActsPass(InsertModuleBetweenModulesPass):
-    before_modules = (PACTConv1d,
-                      PACTConv2d)
-    after_modules = (PACTUnsignedAct,
-                     PACTAsymmetricAct,
-                     PACTHardswish,
-                     PACTHardsigmoid)
+    before_modules = (PACTConv1d, PACTConv2d)
+    after_modules = (PACTUnsignedAct, PACTAsymmetricAct, PACTHardswish, PACTHardsigmoid)
+
     @staticmethod
-    def make_dummy_bn(m : nn.Module, act : nn.Module):
+    def make_dummy_bn(m: nn.Module, act: nn.Module):
         if m.bias is None:
             return None
         if isinstance(m, PACTConv1d):
             bn = nn.BatchNorm1d(m.out_channels)
         else:
-            assert isinstance(m, PACTConv2d), f"InsertBNBetweenBiasedConvAndActsPass: Got bad module - expected PACTConv1/2d, got {type(m)}"
+            assert isinstance(
+                m, PACTConv2d
+            ), f"InsertBNBetweenBiasedConvAndActsPass: Got bad module - expected PACTConv1/2d, got {type(m)}"
             bn = nn.BatchNorm2d(m.out_channels)
         bn.weight.data.copy_(torch.ones([m.out_channels]))
         bn.bias.data.copy_(m.bias)
         bn.running_mean.copy_(torch.zeros([m.out_channels]))
-        bn.running_var.copy_(torch.ones([m.out_channels])-bn.eps)
+        bn.running_var.copy_(torch.ones([m.out_channels]) - bn.eps)
         # Hacky: we are editing the source module...
         m.bias = None
         return bn
 
     def __init__(self):
-        super(InsertBNBetweenBiasedConvAndActsPass, self).__init__(modules_before=self.before_modules,
-                                                                   modules_after=self.after_modules,
-                                                                   make_module_fn=self.make_dummy_bn,
-                                                                   name="BIASED_CONV_AND_ACT")
+        super(InsertBNBetweenBiasedConvAndActsPass, self).__init__(modules_before = self.before_modules,
+                                                                   modules_after = self.after_modules,
+                                                                   make_module_fn = self.make_dummy_bn,
+                                                                   name = "BIASED_CONV_AND_ACT")
+
 
 class HarmonizePACTNetPass(SequentialPass):
-    def __init__(self, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace, **kwargs):
+
+    def __init__(self,
+                 symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace,
+                 **kwargs):
         passes = []
 
         passes.append(RetracePass(symbolic_trace))
-        passes.append(AnnotateEpsPass(eps_in=1.0, n_levels_in=256, signed_in=True, prop_n_levels=False, prop_eps=False))
+        passes.append(
+            AnnotateEpsPass(eps_in = 1.0, n_levels_in = 256, signed_in = True, prop_n_levels = False, prop_eps = False))
         passes.append(AddTreeReplacementPass(**kwargs))
         passes.append(MulReplacementPass())
         passes.append(MeanReplacementPass())
         passes.append(MatmulReplacementPass())
         passes.append(TruedivReplacementPass())
-        actpass_kwargs = {k:v for k,v in kwargs.items() if k not in ['force_out_eps', 'infer_outact', 'infer_sign']}
+        actpass_kwargs = {k: v for k, v in kwargs.items() if k not in ['force_out_eps', 'infer_outact', 'infer_sign']}
         if 'n_levels' in kwargs.keys():
-            actpass_kwargs['n_levels'] = kwargs['n_levels'][0] if not isinstance(kwargs['n_levels'], int) else kwargs['n_levels']
-        passes.append(InsertActivationsBetweenLinearsPass(signed=True, act_kind='identity', **actpass_kwargs))
-        super(HarmonizePACTNetPass, self).__init__(*passes, name_prefix='_HARMONIZE_PACT_NET_PASS')
+            actpass_kwargs['n_levels'] = kwargs['n_levels'][0] if not isinstance(kwargs['n_levels'],
+                                                                                 int) else kwargs['n_levels']
+        passes.append(InsertActivationsBetweenLinearsPass(signed = True, act_kind = 'identity', **actpass_kwargs))
+        super(HarmonizePACTNetPass, self).__init__(*passes, name_prefix = '_HARMONIZE_PACT_NET_PASS')
 
-def disassemble_layernorm_fun(gm : fx.GraphModule, match : Match):
+
+def disassemble_layernorm_fun(gm: fx.GraphModule, match: Match):
     modules = gm_modules(gm)
     matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
     layernorm_node = matched_nodes[0]
     matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
     layernorm = matched_modules[0]
-    assert isinstance(layernorm, PACTLayerNorm), f"layernorm_replacement_fun got bad match - expected LayerNorm, got {type(layernorm)}"
+    assert isinstance(
+        layernorm,
+        PACTLayerNorm), f"layernorm_replacement_fun got bad match - expected LayerNorm, got {type(layernorm)}"
 
     weight = layernorm._parameters['weight'].detach().clone()
     bias = layernorm._parameters['bias'].detach().clone()
@@ -479,7 +533,7 @@ def disassemble_layernorm_fun(gm : fx.GraphModule, match : Match):
         print("Could not access shape of layernorm layer - please run ShapePropPass before LayerNormDisassemblePass!")
         exit()
 
-    new_layernorm = torch.nn.LayerNorm(layernorm.normalized_shape, elementwise_affine=False)
+    new_layernorm = torch.nn.LayerNorm(layernorm.normalized_shape, elementwise_affine = False)
     new_layernorm.eval()
 
     if len(shape) > 3:
@@ -491,25 +545,37 @@ def disassemble_layernorm_fun(gm : fx.GraphModule, match : Match):
     batchnorm._parameters['bias'].data = bias
     batchnorm.eval()
 
-    activation = PACTAsymmetricAct(n_levels=layernorm.n_levels, act_kind='identity', init_clip='max', learn_clip=False, leaky=0.0, symm=True)
+    activation = PACTAsymmetricAct(n_levels = layernorm.n_levels,
+                                   act_kind = 'identity',
+                                   init_clip = 'max',
+                                   learn_clip = False,
+                                   leaky = 0.0,
+                                   symm = True)
     activation.clip_hi.data.copy_(-layernorm.maxval)
     activation.clip_lo.data.copy_(AlmostSymmQuantFunc.apply(-layernorm.maxval, layernorm.n_levels))
     activation.eval()
 
     return torch.nn.Sequential(*[new_layernorm, batchnorm, activation])
 
+
 class LayerNormDisassemblePass(SequentialPass):
-    def __init__(self, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace, **kwargs):
+
+    def __init__(self,
+                 symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace,
+                 **kwargs):
         passes = []
         pattern = nn.Sequential(PACTLayerNorm(256))
-        passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, disassemble_layernorm_fun, f'_LAYERNORM_DISASSEMBLE_PASS'))
-        super().__init__(*passes, name_prefix='_LAYERNORM_DISASSEMBLE_PASS')
+        passes.append(
+            ReplaceSequentialPatternPass(pattern, symbolic_trace, disassemble_layernorm_fun,
+                                         f'_LAYERNORM_DISASSEMBLE_PASS'))
+        super().__init__(*passes, name_prefix = '_LAYERNORM_DISASSEMBLE_PASS')
 
-def rqs_merge_fun(gm : fx.GraphModule, match : Match):
+
+def rqs_merge_fun(gm: fx.GraphModule, match: Match):
     modules = gm_modules(gm)
     matched_nodes = [m for k, m in match.nodes_map.items() if k.op == 'call_module']
-    rqs_1_node = matched_nodes[0]
-    rqs_2_node = matched_nodes[1]
+    matched_nodes[0]
+    matched_nodes[1]
     matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
     rqs_1 = matched_modules[0]
     rqs_2 = matched_modules[1]
@@ -522,30 +588,41 @@ def rqs_merge_fun(gm : fx.GraphModule, match : Match):
 
     signed = (rqs_2.signed and rqs_1.signed)
 
-    newMul = ((rqs_1.mul * rqs_2.mul)/min(rqs_1.div, rqs_2.div)).round()
+    newMul = ((rqs_1.mul * rqs_2.mul) / min(rqs_1.div, rqs_2.div)).round()
     newD = max(rqs_2.div, rqs_1.div)
 
     if not rqs_1.cmsis_requant:
-        add1 = rqs_1.add - (0.5*rqs_1.div)
-        add2 = rqs_2.add - (0.5*rqs_2.div)
-        newAdd = ((add1 * rqs_2.mul + add2 * rqs_1.div)/min(rqs_1.div, rqs_2.div)).round() + newD//2
+        add1 = rqs_1.add - (0.5 * rqs_1.div)
+        add2 = rqs_2.add - (0.5 * rqs_2.div)
+        newAdd = ((add1 * rqs_2.mul + add2 * rqs_1.div) / min(rqs_1.div, rqs_2.div)).round() + newD // 2
     else:
         add1 = rqs_1.add
         add2 = rqs_2.add
-        newAdd = ((add1 * rqs_2.mul + add2 * rqs_1.div)/min(rqs_1.div, rqs_2.div)).round()
-    
+        newAdd = ((add1 * rqs_2.mul + add2 * rqs_1.div) / min(rqs_1.div, rqs_2.div)).round()
+
     if newMul == 0:
         print("JUNGVI: WARNING: Mul factor of RSQ has been rounded to zero. Now setting it to 1.")
         newMul = torch.tensor([1.])
 
-    return RequantShift(newMul, newAdd, (rqs_2.n_levels_out)//(2**mixed), signed = signed, D=newD, cmsis_requant=rqs_1.cmsis_requant, requant_node=rqs_1.requant_node)
+    return RequantShift(newMul,
+                        newAdd, (rqs_2.n_levels_out) // (2**mixed),
+                        signed = signed,
+                        D = newD,
+                        cmsis_requant = rqs_1.cmsis_requant,
+                        requant_node = rqs_1.requant_node)
+
 
 class RQSMergePass(SequentialPass):
-    def __init__(self, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace, **kwargs):
+
+    def __init__(self,
+                 symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace,
+                 **kwargs):
         passes = []
-        pattern = nn.Sequential(RequantShift(torch.Tensor((1.,)), torch.Tensor((1.,)),1), RequantShift(torch.Tensor((1.,)),torch.Tensor((1.,)),1))
+        pattern = nn.Sequential(RequantShift(torch.Tensor((1.,)), torch.Tensor((1.,)), 1),
+                                RequantShift(torch.Tensor((1.,)), torch.Tensor((1.,)), 1))
         passes.append(ReplaceSequentialPatternPass(pattern, symbolic_trace, rqs_merge_fun, f'_RQS_MERGE_PASS'))
-        super().__init__(*passes, name_prefix='_RQS_MERGE_PASS')
+        super().__init__(*passes, name_prefix = '_RQS_MERGE_PASS')
+
 
 def apply_wrap_module_fun(node, _pass, _tracer):
 
@@ -559,13 +636,19 @@ def apply_wrap_module_fun(node, _pass, _tracer):
     returnNode = PACTWrapModule(fx_model, module.n_levels, module._dict, module.quantize, **module.actArgs)
     return returnNode, node.args, node.kwargs
 
-class ApplyPassToWrapModule(ModularizePass):
-    def __init__(self, _pass, name='', symbolic_nodes: Set[nn.Module] = PACT_OPS_INCLUSIVE):
-        pattern = [PACTWrapModule(nn.Identity(), n_levels=256)]
-        tracer = LeafTracer(symbolic_nodes)
-        trace = partial(custom_symbolic_trace, tracer=tracer)
 
-        super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(apply_wrap_module_fun, _pass=_pass, _tracer=tracer), name=f"APPLY_TO_WRAP_PASS_{name}")
+class ApplyPassToWrapModule(ModularizePass):
+
+    def __init__(self, _pass, name = '', symbolic_nodes: Set[nn.Module] = PACT_OPS_INCLUSIVE):
+        pattern = [PACTWrapModule(nn.Identity(), n_levels = 256)]
+        tracer = LeafTracer(symbolic_nodes)
+        trace = partial(custom_symbolic_trace, tracer = tracer)
+
+        super().__init__(op = 'call_module',
+                         target = tuple(pattern),
+                         replacement_fn = partial(apply_wrap_module_fun, _pass = _pass, _tracer = tracer),
+                         name = f"APPLY_TO_WRAP_PASS_{name}")
+
 
 def integerize_wrap_module_fun(node, _pass, _tracer, _shape_fun: lambda node: node.meta['tensor_meta'].shape):
 
@@ -582,33 +665,57 @@ def integerize_wrap_module_fun(node, _pass, _tracer, _shape_fun: lambda node: no
     returnNode = PACTWrapModule(fx_model, module.n_levels, module._dict, False, **module.actArgs)
     return returnNode, node.args, node.kwargs
 
+
 class IntegerizeWrapModule(ModularizePass):
-    def __init__(self, _pass, name='', shape_fun = None):
-        pattern = [PACTWrapModule(nn.Identity(), n_levels=256)]
+
+    def __init__(self, _pass, name = '', shape_fun = None):
+        pattern = [PACTWrapModule(nn.Identity(), n_levels = 256)]
         tracer = LeafTracer(PACT_OPS_INCLUSIVE)
-        trace = partial(custom_symbolic_trace, tracer=tracer)
-        super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(integerize_wrap_module_fun, _pass=_pass, _tracer=tracer, _shape_fun=shape_fun), name=f"APPLY_TO_WRAP_PASS_{name}")
+        trace = partial(custom_symbolic_trace, tracer = tracer)
+        super().__init__(op = 'call_module',
+                         target = tuple(pattern),
+                         replacement_fn = partial(integerize_wrap_module_fun,
+                                                  _pass = _pass,
+                                                  _tracer = tracer,
+                                                  _shape_fun = shape_fun),
+                         name = f"APPLY_TO_WRAP_PASS_{name}")
+
 
 def wrap_module_fun(node, n_levels, quantize, **actArgs):
     module = dict(node.graph._owning_module.named_modules())[node.target]
     returnNode = PACTWrapModule(module, n_levels, module.__dict__, quantize = quantize, **actArgs)
     return returnNode, node.args, node.kwargs
 
+
 class WrapModulePass(ModularizePass):
-    def __init__(self, wrapClassCallable, name = '', n_levels=256, quantize = False, **kwargs):
+
+    def __init__(self, wrapClassCallable, name = '', n_levels = 256, quantize = False, **kwargs):
         self.kwargs = kwargs
         pattern = [wrapClassCallable()]
-        super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(wrap_module_fun, n_levels=n_levels, **self.kwargs, quantize=quantize), name="WRAP_REPLACEMENT_PASS")
+        super().__init__(op = 'call_module',
+                         target = tuple(pattern),
+                         replacement_fn = partial(wrap_module_fun,
+                                                  n_levels = n_levels,
+                                                  **self.kwargs,
+                                                  quantize = quantize),
+                         name = "WRAP_REPLACEMENT_PASS")
+
 
 def replace_module_fun(node, module_class, **actArgs):
     returnNode = module_class(**actArgs)
     return returnNode, node.args, node.kwargs
 
+
 class ReplaceModulePass(ModularizePass):
-    def __init__(self, wrapClassCallable, module_class, name = '', n_levels=256, **kwargs):
+
+    def __init__(self, wrapClassCallable, module_class, name = '', n_levels = 256, **kwargs):
         self.kwargs = kwargs
         pattern = [wrapClassCallable()]
-        super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(replace_module_fun,  module_class=module_class, **self.kwargs), name="WRAP_REPLACEMENT_PASS")
+        super().__init__(op = 'call_module',
+                         target = tuple(pattern),
+                         replacement_fn = partial(replace_module_fun, module_class = module_class, **self.kwargs),
+                         name = "WRAP_REPLACEMENT_PASS")
+
 
 # def unwrap_module_fun(gm : fx.GraphModule, match : Match, wrapClass = None):
 
@@ -679,7 +786,9 @@ class ReplaceModulePass(ModularizePass):
 
 #     return node # PACTWrapModule(copy.deepcopy(wrap_module), n_levels)
 
+
 def unwrap_linearattention_fun(wrap_module):
+
     def reqShiftParams(module):
         return (module.mul, module.add, module.div)
 
@@ -687,8 +796,9 @@ def unwrap_linearattention_fun(wrap_module):
         dim = wrap_module._dict['out_dim']
         dim_head = wrap_module._dict['dim']
         heads = wrap_module._dict['h']
-    except Exception as e:
-        import IPython; IPython.embed()
+    except Exception:
+        import IPython
+        IPython.embed()
     mod = dict(wrap_module.module.named_parameters())
     wq_weight = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_0.weight']
     wk_weight = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_1.weight']
@@ -714,13 +824,20 @@ def unwrap_linearattention_fun(wrap_module):
 
     #import IPython; IPython.embed()
 
-    wq_requant_mul, wq_requant_add, wq_requant_div = reqShiftParams(wrap_module.module.AttentionMechanism.kernel_func_1._QL_REPLACED__INTEGERIZE_UNSIGNED_ACT_PASS_0)
-    wk_requant_mul, wk_requant_add, wk_requant_div = reqShiftParams(wrap_module.module.AttentionMechanism.kernel_func_2._QL_REPLACED__INTEGERIZE_UNSIGNED_ACT_PASS_1)
-    wv_requant_mul, wv_requant_add, wv_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_0)
-    preattn_requant_mul, preattn_requant_add, preattn_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_1)
-    normalizer_requant_mul, normalizer_requant_add, normalizer_requant_div = reqShiftParams(wrap_module.module.AttentionMechanism._QL_REPLACED__INTEGERIZE_UNSIGNED_ACT_PASS_2)
-    postattn_requant_mul, postattn_requant_add, postattn_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_2)
-    wo_requant_mul, wo_requant_add, wo_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_3)
+    wq_requant_mul, wq_requant_add, wq_requant_div = reqShiftParams(
+        wrap_module.module.AttentionMechanism.kernel_func_1._QL_REPLACED__INTEGERIZE_UNSIGNED_ACT_PASS_0)
+    wk_requant_mul, wk_requant_add, wk_requant_div = reqShiftParams(
+        wrap_module.module.AttentionMechanism.kernel_func_2._QL_REPLACED__INTEGERIZE_UNSIGNED_ACT_PASS_1)
+    wv_requant_mul, wv_requant_add, wv_requant_div = reqShiftParams(
+        wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_0)
+    preattn_requant_mul, preattn_requant_add, preattn_requant_div = reqShiftParams(
+        wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_1)
+    normalizer_requant_mul, normalizer_requant_add, normalizer_requant_div = reqShiftParams(
+        wrap_module.module.AttentionMechanism._QL_REPLACED__INTEGERIZE_UNSIGNED_ACT_PASS_2)
+    postattn_requant_mul, postattn_requant_add, postattn_requant_div = reqShiftParams(
+        wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_2)
+    wo_requant_mul, wo_requant_add, wo_requant_div = reqShiftParams(
+        wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_3)
 
     div = wrap_module.module._QL_TRUEDIV_REPLACEMENT_PASS_MODULARIZED_0
     Delta = div.Delta
@@ -729,17 +846,14 @@ def unwrap_linearattention_fun(wrap_module):
 
     n_levels = wrap_module.n_levels
 
-    return (wq_weight, wq_bias, wq_requant_mul, wq_requant_div,
-            wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
-            wv_weight, wv_bias, wv_requant_mul, wv_requant_div,
-            preattn_requant_mul, preattn_requant_div,
-            normalizer_requant_mul, normalizer_requant_div,
-            postattn_requant_mul, postattn_requant_div,
-            wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
-            dim, heads, dim_head,
-            Delta, eps, act_type, n_levels), {}
+    return (wq_weight, wq_bias, wq_requant_mul, wq_requant_div, wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
+            wv_weight, wv_bias, wv_requant_mul, wv_requant_div, preattn_requant_mul, preattn_requant_div,
+            normalizer_requant_mul, normalizer_requant_div, postattn_requant_mul, postattn_requant_div, wo_weight,
+            wo_bias, wo_requant_mul, wo_requant_div, dim, heads, dim_head, Delta, eps, act_type, n_levels), {}
+
 
 def unwrap_clca_fun(wrap_module):
+
     def reqShiftParams(module):
         return (module.mul, module.add, module.div)
 
@@ -748,8 +862,9 @@ def unwrap_clca_fun(wrap_module):
         dim_head = wrap_module._dict['dim']
         heads = wrap_module._dict['h']
         out_dim = wrap_module._dict['out_dim']
-    except Exception as e:
-        import IPython; IPython.embed()
+    except Exception:
+        import IPython
+        IPython.embed()
     mod = dict(wrap_module.module.named_parameters())
     wq_weight = mod['WQ._QL_REPLACED__INTEGERIZE_PACT_CONV1D_PASS_0.weight']
     wkv_weight = mod['WKV._QL_REPLACED__INTEGERIZE_PACT_CONV1D_PASS_1.weight']
@@ -770,17 +885,24 @@ def unwrap_clca_fun(wrap_module):
 
     #import IPython; IPython.embed()
 
-    wq_requant_mul, wq_requant_add, wq_requant_div = reqShiftParams(wrap_module.module.WQ._QL_REPLACED__INTEGERIZE_BN1D_UNSIGNED_ACT_PASS_0)
-    wk_requant_mul, wk_requant_add, wk_requant_div = reqShiftParams(wrap_module.module.AttentionMechanism._QL_REPLACED__INTEGERIZE_UNSIGNED_ACT_PASS_0)
-    wv_requant_mul, wv_requant_add, wv_requant_div = reqShiftParams(wrap_module.module.WKV._QL_REPLACED__INTEGERIZE_BN1D_SIGNED_ACT_PASS_0)
+    wq_requant_mul, wq_requant_add, wq_requant_div = reqShiftParams(
+        wrap_module.module.WQ._QL_REPLACED__INTEGERIZE_BN1D_UNSIGNED_ACT_PASS_0)
+    wk_requant_mul, wk_requant_add, wk_requant_div = reqShiftParams(
+        wrap_module.module.AttentionMechanism._QL_REPLACED__INTEGERIZE_UNSIGNED_ACT_PASS_0)
+    wv_requant_mul, wv_requant_add, wv_requant_div = reqShiftParams(
+        wrap_module.module.WKV._QL_REPLACED__INTEGERIZE_BN1D_SIGNED_ACT_PASS_0)
 
-    kdiv_requant_mul, kdiv_requant_add, kdiv_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_0)
+    kdiv_requant_mul, kdiv_requant_add, kdiv_requant_div = reqShiftParams(
+        wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_0)
 
-    preattn_requant_mul, preattn_requant_add, preattn_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_1)
+    preattn_requant_mul, preattn_requant_add, preattn_requant_div = reqShiftParams(
+        wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_1)
 
-    postattn_requant_mul, postattn_requant_add, postattn_requant_div = reqShiftParams(wrap_module.module.AttentionMechanism._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_2)
+    postattn_requant_mul, postattn_requant_add, postattn_requant_div = reqShiftParams(
+        wrap_module.module.AttentionMechanism._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_2)
 
-    wo_requant_mul, wo_requant_add, wo_requant_div = reqShiftParams(wrap_module.module.out._QL_REPLACED__INTEGERIZE_BN1D_SIGNED_ACT_PASS_1)
+    wo_requant_mul, wo_requant_add, wo_requant_div = reqShiftParams(
+        wrap_module.module.out._QL_REPLACED__INTEGERIZE_BN1D_SIGNED_ACT_PASS_1)
 
     div = wrap_module.module._QL_TRUEDIV_REPLACEMENT_PASS_MODULARIZED_1
     Delta = div.Delta
@@ -790,17 +912,15 @@ def unwrap_clca_fun(wrap_module):
 
     n_levels = wrap_module.n_levels
 
-    return (wq_weight, wq_bias, wq_requant_mul, wq_requant_add, wq_requant_div,
-            wkv_weight, wkv_bias, wk_requant_mul, wk_requant_add, wk_requant_div,
-            wv_requant_mul, wv_requant_add, wv_requant_div,
-            kdiv_requant_mul, kdiv_requant_add, kdiv_requant_div,
-            preattn_requant_mul, preattn_requant_add, preattn_requant_div,
-            postattn_requant_mul, postattn_requant_add, postattn_requant_div,
-            wo_weight, wo_bias, wo_requant_mul, wo_requant_add, wo_requant_div,
-            dim, heads, dim_head, out_dim,
-            Delta, eps, eta, act_type, n_levels), {}
+    return (wq_weight, wq_bias, wq_requant_mul, wq_requant_add, wq_requant_div, wkv_weight, wkv_bias, wk_requant_mul,
+            wk_requant_add, wk_requant_div, wv_requant_mul, wv_requant_add, wv_requant_div, kdiv_requant_mul,
+            kdiv_requant_add, kdiv_requant_div, preattn_requant_mul, preattn_requant_add, preattn_requant_div,
+            postattn_requant_mul, postattn_requant_add, postattn_requant_div, wo_weight, wo_bias, wo_requant_mul,
+            wo_requant_add, wo_requant_div, dim, heads, dim_head, out_dim, Delta, eps, eta, act_type, n_levels), {}
+
 
 def unwrap_mhsa_fun(wrap_module):
+
     def reqShiftParams(module):
         return (module.mul, module.add, module.div)
 
@@ -808,8 +928,9 @@ def unwrap_mhsa_fun(wrap_module):
         dim = wrap_module._dict['out_dim']
         dim_head = wrap_module._dict['dim']
         heads = wrap_module._dict['h']
-    except Exception as e:
-        import IPython; IPython.embed()
+    except Exception:
+        import IPython
+        IPython.embed()
     mod = dict(wrap_module.module.named_parameters())
     wq_weight = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_0.weight']
     wk_weight = mod['_QL_REPLACED__INTEGERIZE_PACT_LIN_PASS_1.weight']
@@ -833,12 +954,18 @@ def unwrap_mhsa_fun(wrap_module):
     except:
         wo_bias = torch.Tensor((0,))
 
-    wq_requant_mul, wq_requant_add, wq_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_0)
-    wk_requant_mul, wk_requant_add, wk_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_1)
-    wv_requant_mul, wv_requant_add, wv_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_2)
-    preattn_requant_mul, preattn_requant_add, preattn_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_3)
-    postattn_requant_mul, postattn_requant_add, postattn_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_4)
-    wo_requant_mul, wo_requant_add, wo_requant_div = reqShiftParams(wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_5)
+    wq_requant_mul, wq_requant_add, wq_requant_div = reqShiftParams(
+        wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_0)
+    wk_requant_mul, wk_requant_add, wk_requant_div = reqShiftParams(
+        wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_1)
+    wv_requant_mul, wv_requant_add, wv_requant_div = reqShiftParams(
+        wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_2)
+    preattn_requant_mul, preattn_requant_add, preattn_requant_div = reqShiftParams(
+        wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_3)
+    postattn_requant_mul, postattn_requant_add, postattn_requant_div = reqShiftParams(
+        wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_4)
+    wo_requant_mul, wo_requant_add, wo_requant_div = reqShiftParams(
+        wrap_module.module._QL_REPLACED__INTEGERIZE_SIGNED_ACT_PASS_5)
 
     sm = wrap_module.module.AttentionMechanism._QL_REPLACED__INTEGER_SOFTMAX_PASS_0
 
@@ -848,14 +975,11 @@ def unwrap_mhsa_fun(wrap_module):
     isoftmaxlog2 = sm.log2
     n_levels = wrap_module.n_levels
 
-    return (wq_weight, wq_bias, wq_requant_mul, wq_requant_div,
-            wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
-            wv_weight, wv_bias, wv_requant_mul, wv_requant_div,
-            preattn_requant_mul, preattn_requant_div,
-            postattn_requant_mul, postattn_requant_div,
-            wo_weight, wo_bias, wo_requant_mul, wo_requant_div,
-            dim, heads, dim_head,
-            isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2, n_levels, wrap_module), {}
+    return (wq_weight, wq_bias, wq_requant_mul, wq_requant_div, wk_weight, wk_bias, wk_requant_mul, wk_requant_div,
+            wv_weight, wv_bias, wv_requant_mul, wv_requant_div, preattn_requant_mul, preattn_requant_div,
+            postattn_requant_mul, postattn_requant_div, wo_weight, wo_bias, wo_requant_mul, wo_requant_div, dim, heads,
+            dim_head, isoftmaxA, isoftmaxB, isoftmaxC, isoftmaxlog2, n_levels, wrap_module), {}
+
 
 def unwrap_module_fun(node, wrapClass = None, modules = None, unwrapFunction = None):
     wrap_module = modules[node.target]
@@ -867,76 +991,100 @@ def unwrap_module_fun(node, wrapClass = None, modules = None, unwrapFunction = N
 
     return retNode, node.args, node.kwargs
 
+
 class UnwrapModulePass(ModularizePass):
-    def __init__(self, ReplacementClass, ReplacementFunction = unwrap_mhsa_fun, modules = None, name=''):
-        passes = []
+
+    def __init__(self, ReplacementClass, ReplacementFunction = unwrap_mhsa_fun, modules = None, name = ''):
         pattern = nn.Sequential(PACTWrapModule(nn.Identity(), 256))
         tracer = LeafTracer(PACT_OPS)
-        trace = partial(custom_symbolic_trace, tracer=tracer)
-        super().__init__(op='call_module', target=tuple(pattern), replacement_fn = partial(unwrap_module_fun, wrapClass = ReplacementClass, modules=modules, unwrapFunction= ReplacementFunction), name=f"UNWRAP_PASS_{name}")
+        trace = partial(custom_symbolic_trace, tracer = tracer)
+        super().__init__(op = 'call_module',
+                         target = tuple(pattern),
+                         replacement_fn = partial(unwrap_module_fun,
+                                                  wrapClass = ReplacementClass,
+                                                  modules = modules,
+                                                  unwrapFunction = ReplacementFunction),
+                         name = f"UNWRAP_PASS_{name}")
 
-def conv1d_replacement_fun(gm : fx.GraphModule, match : Match, *args, **kwargs):
+
+def conv1d_replacement_fun(gm: fx.GraphModule, match: Match, *args, **kwargs):
     modules = gm_modules(gm)
     matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
     conv = matched_modules[0]
     assert isinstance(conv, nn.Conv1d), f"conv1d_replacement_fun got bad match - expected nn.Conv1d, got {type(conv)}"
     return PACTConv1d.from_conv1d(conv, **kwargs)
 
-def conv2d_replacement_fun(gm : fx.GraphModule, match : Match, *args, **kwargs):
+
+def conv2d_replacement_fun(gm: fx.GraphModule, match: Match, *args, **kwargs):
     modules = gm_modules(gm)
     matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
     conv = matched_modules[0]
     assert isinstance(conv, nn.Conv2d), f"conv2d_replacement_fun got bad match - expected nn.Conv2d, got {type(conv)}"
     return PACTConv2d.from_conv2d(conv, **kwargs)
 
-class HomogeneousFakeQuantConvPass(SequentialPass):
-    def __init__(self, pactConvConfig: dict, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace):
-        passes = []
-        patternList = [nn.Sequential(nn.Conv1d(3, 6, 5)),  nn.Sequential(nn.Conv2d(3, 6, 5))]
-        passes.append(ReplaceSequentialPatternPass(nn.Sequential(nn.Conv1d(3, 6, 5)),
-                                                            symbolic_trace,
-                                                            partial(conv1d_replacement_fun, **pactConvConfig),
-                                                            f'PACTIFIED_CONV1D'))
-        passes.append(ReplaceSequentialPatternPass(nn.Sequential(nn.Conv2d(3, 6, 5)),
-                                                            symbolic_trace,
-                                                            partial(conv2d_replacement_fun, **pactConvConfig),
-                                                            f'PACTIFIED_CONV2D'))
-        super().__init__(*passes, name_prefix='')
 
-def linear_replacement_fun(gm : fx.GraphModule, match : Match, *args, **kwargs):
+class HomogeneousFakeQuantConvPass(SequentialPass):
+
+    def __init__(self,
+                 pactConvConfig: dict,
+                 symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace):
+        passes = []
+        [nn.Sequential(nn.Conv1d(3, 6, 5)), nn.Sequential(nn.Conv2d(3, 6, 5))]
+        passes.append(
+            ReplaceSequentialPatternPass(nn.Sequential(nn.Conv1d(3, 6, 5)), symbolic_trace,
+                                         partial(conv1d_replacement_fun, **pactConvConfig), f'PACTIFIED_CONV1D'))
+        passes.append(
+            ReplaceSequentialPatternPass(nn.Sequential(nn.Conv2d(3, 6, 5)), symbolic_trace,
+                                         partial(conv2d_replacement_fun, **pactConvConfig), f'PACTIFIED_CONV2D'))
+        super().__init__(*passes, name_prefix = '')
+
+
+def linear_replacement_fun(gm: fx.GraphModule, match: Match, *args, **kwargs):
     modules = gm_modules(gm)
     matched_modules = [modules[m.target] for k, m in match.nodes_map.items() if k.op == 'call_module'][::-1]
     linear = matched_modules[0]
-    assert isinstance(linear, nn.Linear), f"linear_replacement_fun got bad match - expected nn.Linear, got {type(linear)}"
+    assert isinstance(linear,
+                      nn.Linear), f"linear_replacement_fun got bad match - expected nn.Linear, got {type(linear)}"
     return PACTLinear.from_linear(linear, **kwargs)
 
+
 class HomogeneousFakeQuantLinearPass(SequentialPass):
-    def __init__(self, pactLinearConfig: dict, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace):
+
+    def __init__(self,
+                 pactLinearConfig: dict,
+                 symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace):
         passes = []
         pattern = nn.Sequential(nn.Linear(42, 42))
-        passes.append(ReplaceSequentialPatternPass(pattern,
-                                                            symbolic_trace,
-                                                            partial(linear_replacement_fun, **pactLinearConfig),
-                                                            f'PACTIFIED_LINEAR'))
-        super().__init__(*passes, name_prefix='')
+        passes.append(
+            ReplaceSequentialPatternPass(pattern, symbolic_trace, partial(linear_replacement_fun, **pactLinearConfig),
+                                         f'PACTIFIED_LINEAR'))
+        super().__init__(*passes, name_prefix = '')
+
 
 class HomogeneousFakeQuantReluPass(SequentialPass):
-    def __init__(self, pactActConfig: dict, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace):
+
+    def __init__(self,
+                 pactActConfig: dict,
+                 symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace):
         passes = []
-        passes.append(ReplaceSequentialPatternPass(nn.Sequential(nn.ReLU()),
-                                                            symbolic_trace,
-                                                            lambda x,y : PACTUnsignedAct(**pactActConfig),
-                                                            f'PACTIFIED_RELU'))
-        passes.append(ReplaceSequentialPatternPass(nn.Sequential(nn.ReLU6()),
-                                                            symbolic_trace,
-                                                            lambda x,y : PACTUnsignedAct(**pactActConfig),
-                                                            f'PACTIFIED_RELU6'))
-        super().__init__(*passes, name_prefix='')
+        passes.append(
+            ReplaceSequentialPatternPass(nn.Sequential(nn.ReLU()), symbolic_trace,
+                                         lambda x, y: PACTUnsignedAct(**pactActConfig), f'PACTIFIED_RELU'))
+        passes.append(
+            ReplaceSequentialPatternPass(nn.Sequential(nn.ReLU6()), symbolic_trace,
+                                         lambda x, y: PACTUnsignedAct(**pactActConfig), f'PACTIFIED_RELU6'))
+        super().__init__(*passes, name_prefix = '')
+
 
 class HomogeneousFakeQuantPass(SequentialPass):
-    def __init__(self, symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace, convArgs: dict = {}, actArgs: dict = {}, linearArgs: dict = {}):
+
+    def __init__(self,
+                 symbolic_trace: Callable[[Union[nn.Module, fx.GraphModule]], fx.GraphModule] = PACT_symbolic_trace,
+                 convArgs: dict = {},
+                 actArgs: dict = {},
+                 linearArgs: dict = {}):
         passes = []
-        passes.append(HomogeneousFakeQuantConvPass(convArgs, symbolic_trace=symbolic_trace))
-        passes.append(HomogeneousFakeQuantReluPass(actArgs, symbolic_trace=symbolic_trace))
-        passes.append(HomogeneousFakeQuantLinearPass(linearArgs, symbolic_trace=symbolic_trace))
-        super().__init__(*passes, name_prefix='')
+        passes.append(HomogeneousFakeQuantConvPass(convArgs, symbolic_trace = symbolic_trace))
+        passes.append(HomogeneousFakeQuantReluPass(actArgs, symbolic_trace = symbolic_trace))
+        passes.append(HomogeneousFakeQuantLinearPass(linearArgs, symbolic_trace = symbolic_trace))
+        super().__init__(*passes, name_prefix = '')

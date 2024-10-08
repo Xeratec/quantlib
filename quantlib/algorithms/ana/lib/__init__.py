@@ -23,7 +23,6 @@ import torch
 
 from quantlib.algorithms.ana.lib import ana_normal, ana_logistic, ana_uniform, ana_triangular
 
-
 try:
     import ana_uniform_cuda
     import ana_triangular_cuda
@@ -33,7 +32,6 @@ try:
 except ImportError:
     use_ana_cuda_kernels = False
 
-
 __all__ = [
     'ANAUniform',
     'ANATriangular',
@@ -41,8 +39,8 @@ __all__ = [
     'ANALogistic',
 ]
 
-
 # uniform noise
+
 
 class ANAUniform(torch.autograd.Function):
     """A stochastic process composed by step functions.
@@ -51,6 +49,7 @@ class ANAUniform(torch.autograd.Function):
     functions with fixed quantization levels (codominion) and uniform noise on
     the jumps positions.
     """
+
     @staticmethod
     def forward(ctx, x_in, q, t, mi, sigma, strategy, training):
         ctx.save_for_backward(x_in, q, t, mi, sigma)
@@ -72,6 +71,7 @@ class ANAUniform(torch.autograd.Function):
 
 # triangular noise
 
+
 class ANATriangular(torch.autograd.Function):
     """A stochastic process composed by step functions.
 
@@ -79,6 +79,7 @@ class ANATriangular(torch.autograd.Function):
     functions with fixed quantization levels (codominion) and triangular noise
     on the jumps positions.
     """
+
     @staticmethod
     def forward(ctx, x_in, q, t, mi, sigma, strategy, training):
         ctx.save_for_backward(x_in, q, t, mi, sigma)
@@ -100,6 +101,7 @@ class ANATriangular(torch.autograd.Function):
 
 # normal noise
 
+
 class ANANormal(torch.autograd.Function):
     """A stochastic process composed by step functions.
 
@@ -107,6 +109,7 @@ class ANANormal(torch.autograd.Function):
     functions with fixed quantization levels (codominion) and normal noise on
     the jumps positions.
     """
+
     @staticmethod
     def forward(ctx, x_in, q, t, mi, sigma, strategy, training):
         ctx.save_for_backward(x_in, q, t, mi, sigma)
@@ -128,6 +131,7 @@ class ANANormal(torch.autograd.Function):
 
 # logistic noise
 
+
 class ANALogistic(torch.autograd.Function):
     """A stochastic process composed by step functions.
 
@@ -135,6 +139,7 @@ class ANALogistic(torch.autograd.Function):
     functions with fixed quantization levels (codominion) and logistic noise on
     the jumps positions.
     """
+
     @staticmethod
     def forward(ctx, x_in, q, t, mi, sigma, strategy, training):
         ctx.save_for_backward(x_in, q, t, mi, sigma)

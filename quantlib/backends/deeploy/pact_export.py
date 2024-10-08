@@ -36,7 +36,7 @@ import onnxruntime
 
 import quantlib.editing.fx as qlfx
 from quantlib.editing.lightweight import LightweightGraph
-from quantlib.algorithms.pact import RequantShift, PACTIntegerLayerNorm, PACTIntegerGELU, PACTWrapMHSA, PACTWrapModule, PACTIntegerHardswish, PACTTrueIntegerDiv, PACTIntegerRMSNorm
+from quantlib.algorithms.pact import RequantShift, PACTIntegerLayerNorm, PACTIntegerGELU, PACTWrapMHSA, PACTIntegerHardswish, PACTTrueIntegerDiv, PACTIntegerRMSNorm
 
 # Import ONNX runtime
 from onnxruntime.tools.symbolic_shape_infer import SymbolicShapeInference
@@ -44,8 +44,10 @@ from onnxruntime.transformers.optimizer import optimize_model
 from dataclasses import dataclass
 
 import warnings
-warnings.filterwarnings("ignore", category=FutureWarning)
-warnings.filterwarnings("ignore", category=torch.jit.TracerWarning)
+
+warnings.filterwarnings("ignore", category = FutureWarning)
+warnings.filterwarnings("ignore", category = torch.jit.TracerWarning)
+
 
 @dataclass
 class OptimizationConfig:
@@ -63,6 +65,7 @@ class OptimizationConfig:
     attention_mask_format: int = 3
     use_multi_head_attention: bool = False
     enable_gemm_fast_gelu: bool = False
+
 
 # By default all attributes of the original node are removed and replaced
 # with the default attributes of the temporary replacement node.
@@ -84,7 +87,7 @@ NODES_MAPPING = {
     "ITAMax": {
         "op_type": "Relu",
     },
-     "ITAPartialMax": {
+    "ITAPartialMax": {
         "op_type": "Relu",
     },
     "iGELU": {
@@ -131,7 +134,8 @@ def save_beautiful_text(t: np.ndarray, layer_name: str, filepath: str):
 
         # print(layer_name, t.max())
         for batch in t:
-            if t.ndim >= 4: fp.write("[\n")
+            if t.ndim >= 4:
+                fp.write("[\n")
             for channel in batch:
                 if t.ndim >= 4:
                     fp.write("  [\n  ")
@@ -151,8 +155,11 @@ def save_beautiful_text(t: np.ndarray, layer_name: str, filepath: str):
                     elif t.ndim >= 3:
                         fp.write("\n")
 
-                if t.ndim >= 3: fp.write("]\n")
-            if t.ndim >= 4: fp.write("]\n")
+                if t.ndim >= 3:
+                    fp.write("]\n")
+            if t.ndim >= 4:
+                fp.write("]\n")
+
 
 def flattenOutput(inList: List[Union[torch.Tensor, List[torch.Tensor]]]) -> List[torch.Tensor]:
 
@@ -173,32 +180,31 @@ def export_net(net: nn.Module,
                eps_in: float,
                in_data: Union[torch.Tensor, Tuple[torch.Tensor, ...]],
                integerize: bool = True,
-               n_levels_in=256,
+               n_levels_in = 256,
                D: float = 2**24,
                opset_version: int = 10,
                onnx_shape_inference = False,
-               code_size=0):
+               code_size = 0):
     net = net.eval()
 
     out_path = Path(out_dir)
-    out_path.mkdir(parents=True, exist_ok=True)
+    out_path.mkdir(parents = True, exist_ok = True)
     onnx_file = f"{name}.onnx"
     onnx_path = out_path.joinpath(onnx_file)
 
     if integerize:
         net_traced = qlfx.passes.pact.PACT_symbolic_trace(net)
 
-        int_pass = qlfx.passes.pact.IntegerizePACTNetPass(
-            shape_in=in_data.shape,
-            eps_in=eps_in,
-            D=D,
-            n_levels_in=n_levels_in,
-            requant_node=True,
-            export_layernorm_node = True,
-            export_softmax_node = True,
-            export_gelu_node = True,
-            export_div_node = True)
-            
+        int_pass = qlfx.passes.pact.IntegerizePACTNetPass(shape_in = in_data.shape,
+                                                          eps_in = eps_in,
+                                                          D = D,
+                                                          n_levels_in = n_levels_in,
+                                                          requant_node = True,
+                                                          export_layernorm_node = True,
+                                                          export_softmax_node = True,
+                                                          export_gelu_node = True,
+                                                          export_div_node = True)
+
         net_integerized = int_pass(net_traced)
         print("[QuantLab] === Integer PyTorch Network ===")
         print(net_integerized.modules)
@@ -213,12 +219,13 @@ def export_net(net: nn.Module,
         "do_constant_folding": True,
     }
     try:
-        torch.onnx._export(net_integerized.to('cpu'), in_data,
+        torch.onnx._export(net_integerized.to('cpu'),
+                           in_data,
                            str(onnx_path),
-                           opset_version=opset_version,
-                           custom_opsets={"PACTOps": 1},
-                           onnx_shape_inference=onnx_shape_inference,
-                           verbose=False,
+                           opset_version = opset_version,
+                           custom_opsets = {"PACTOps": 1},
+                           onnx_shape_inference = onnx_shape_inference,
+                           verbose = False,
                            keep_initializers_as_inputs = False,
                            **kwargs)
 
@@ -263,7 +270,6 @@ def export_net(net: nn.Module,
         for i, init in enumerate(onnxModel.graph.initializer):
             onnxModel.graph.initializer[i].name = replace_name(init.name)
 
-
     # Replace custom nodes with standard ones for optimization
     replaced_nodes = {}
     for n in onnxModel.graph.node:
@@ -290,14 +296,14 @@ def export_net(net: nn.Module,
 
     # Optimize ONNX model with replaced nodes
     optimization_config = OptimizationConfig(
-        enable_skip_layer_norm=False,
-        enable_bias_gelu=False,
+        enable_skip_layer_norm = False,
+        enable_bias_gelu = False,
     )
 
     if Version(onnxruntime.__version__) >= Version("1.17"):
         optimization_config.enable_rotary_embeddings = False
 
-    optimizer = optimize_model(str(onnx_path), optimization_options=optimization_config)
+    optimizer = optimize_model(str(onnx_path), optimization_options = optimization_config)
     optimizer.save_model_to_file(str(onnx_path))
 
     # Run shape inference
@@ -334,41 +340,37 @@ def export_net(net: nn.Module,
 
         acts.append((_name, torch.round(outp)))
 
-    integerized_nodes = LightweightGraph.build_nodes_list(net_integerized, leaf_types=(PACTWrapMHSA, ))
+    integerized_nodes = LightweightGraph.build_nodes_list(net_integerized, leaf_types = (PACTWrapMHSA,))
     for n in integerized_nodes:
-        if isinstance(
-                n.module,
-            (RequantShift, nn.Conv2d, nn.Conv1d, nn.AdaptiveAvgPool1d,
-             nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d, nn.AvgPool1d,
-             nn.AvgPool2d, nn.AvgPool3d, nn.MaxPool1d, nn.MaxPool2d,
-             nn.MaxPool3d, nn.Linear, PACTIntegerLayerNorm, PACTIntegerGELU, PACTIntegerRMSNorm,
-             PACTIntegerHardswish, PACTTrueIntegerDiv,
-             PACTWrapMHSA)):
-            hook = partial(dump_hook, name=n.name)
+        if isinstance(n.module, (RequantShift, nn.Conv2d, nn.Conv1d, nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d,
+                                 nn.AdaptiveAvgPool3d, nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d, nn.MaxPool1d,
+                                 nn.MaxPool2d, nn.MaxPool3d, nn.Linear, PACTIntegerLayerNorm, PACTIntegerGELU,
+                                 PACTIntegerRMSNorm, PACTIntegerHardswish, PACTTrueIntegerDiv, PACTWrapMHSA)):
+            hook = partial(dump_hook, name = n.name)
             n.module.register_forward_hook(hook)
 
     # Open the supplied input image
 
     if in_data is not None:
 
-        net_integerized = net_integerized.to(dtype=torch.float64)
+        net_integerized = net_integerized.to(dtype = torch.float64)
 
         if isinstance(in_data, torch.Tensor):
-            input = in_data.clone().to(dtype=torch.float64)
+            input = in_data.clone().to(dtype = torch.float64)
             input_np = [torch.round(input.detach()).numpy().astype(np.int64)]
             _output = net_integerized(input)
         else:
-            input = [t.clone().to(dtype=torch.float64) for t in in_data]
+            input = [t.clone().to(dtype = torch.float64) for t in in_data]
             input_np = [torch.round(t.detach()).numpy().astype(np.int64) for t in input]
             _output = net_integerized(*input)
 
         if isinstance(_output, torch.Tensor):
-            _output.to(dtype=torch.float64)
+            _output.to(dtype = torch.float64)
             output = _output
             output_np = [torch.round(output.detach()).numpy().astype(np.int64)]
         else:
             output = flattenOutput(_output)
-            output = [t.to(dtype=torch.float64) for t in output if isinstance(t, torch.Tensor)]
+            output = [t.to(dtype = torch.float64) for t in output if isinstance(t, torch.Tensor)]
             output_np = [torch.round(t.detach()).numpy().astype(np.int64) for t in output]
 
         inputkwargs = {}
@@ -378,7 +380,7 @@ def export_net(net: nn.Module,
         for idx, array in enumerate(output_np):
             outputkwargs[f"output_{idx}"] = array
 
-        np.savez(out_path.joinpath("inputs.npz"),**inputkwargs)
+        np.savez(out_path.joinpath("inputs.npz"), **inputkwargs)
         np.savez(out_path.joinpath("outputs.npz"), **outputkwargs)
 
         acts_np = {}
@@ -387,7 +389,7 @@ def export_net(net: nn.Module,
 
         np.savez(out_path.joinpath("activations.npz"), **acts_np)
 
-        out_path.joinpath("activations/").mkdir(parents=True, exist_ok=True)
+        out_path.joinpath("activations/").mkdir(parents = True, exist_ok = True)
 
         for idx, array in enumerate(input_np):
             save_beautiful_text(array, f"input_{idx}", out_path.joinpath(f"activations/input_{idx}.txt"))

@@ -26,7 +26,6 @@ from dataclasses import dataclass
 
 from collections.abc import Iterable
 
-import numpy as np
 
 import torch
 from torch import fx, nn
@@ -35,281 +34,308 @@ from quantlib.algorithms.pact.pact_ops import *
 from quantlib.algorithms.bb.bb_ops import *
 from quantlib.algorithms.generic.generic_ops import *
 
-from .pass_base import FxPass, ReplaceSequentialPatternPass
+from .pass_base import FxPass
 from ..util import gm_modules, module_of_node
-import math
 import operator
 
-__all__ = ['AnnotateEpsPass',
-           'extract_eps']
+__all__ = ['AnnotateEpsPass', 'extract_eps']
 
-def eps_conversion_pact_linears(m : nn.Module, eps_in : torch.Tensor, **kwargs):
+
+def eps_conversion_pact_linears(m: nn.Module, eps_in: torch.Tensor, **kwargs):
     ret = m.get_eps_out(eps_in).type_as(eps_in)
     return ret
 
 
-def eps_conversion_pact_acts(m : nn.Module, eps_in : torch.Tensor, **kwargs):
+def eps_conversion_pact_acts(m: nn.Module, eps_in: torch.Tensor, **kwargs):
     return m.get_eps().type_as(eps_in)
 
-def eps_conversion_invalid(m : nn.Module, *eps_in : torch.Tensor, **kw_eps_in : torch.Tensor):
+
+def eps_conversion_invalid(m: nn.Module, *eps_in: torch.Tensor, **kw_eps_in: torch.Tensor):
     assert False, f"Module class: {type(m)} does not have a valid epsilon conversion!"
 
-def eps_conversion_pact_gelu(m : nn.Module, eps_in : torch.Tensor, **kwargs):
+
+def eps_conversion_pact_gelu(m: nn.Module, eps_in: torch.Tensor, **kwargs):
     return m.get_eps_out(eps_in).type_as(eps_in)
 
-def eps_conversion_pact_matmul(m : nn.Module, *eps_ins, **kwargs):
+
+def eps_conversion_pact_matmul(m: nn.Module, *eps_ins, **kwargs):
     return eps_ins[0] * eps_ins[1].type_as(eps_ins[0])
 
-def eps_conversion_matmul(m : nn.Module, *eps_ins, **kwargs):
+
+def eps_conversion_matmul(m: nn.Module, *eps_ins, **kwargs):
     return eps_ins[0] * eps_ins[1].type_as(eps_ins[0])
 
-def eps_conversion_pact_softmax(m : nn.Module, eps_in : torch.Tensor, **kwargs):
-    return torch.Tensor((1./(m.n_levels-1.),)).type_as(eps_in)
 
-def eps_conversion_pact_layernorm(m : nn.Module, eps_in : torch.Tensor, **kwargs):
+def eps_conversion_pact_softmax(m: nn.Module, eps_in: torch.Tensor, **kwargs):
+    return torch.Tensor((1. / (m.n_levels - 1.),)).type_as(eps_in)
+
+
+def eps_conversion_pact_layernorm(m: nn.Module, eps_in: torch.Tensor, **kwargs):
     return m.get_eps_out(eps_in).type_as(eps_in)
 
-def eps_conversion_identity(m : nn.Module, *eps_ins, **kwargs):
+
+def eps_conversion_identity(m: nn.Module, *eps_ins, **kwargs):
     return eps_ins[0]
 
-def eps_conversion_truediv(m : nn.Module, *eps_ins, **kwargs):
+
+def eps_conversion_truediv(m: nn.Module, *eps_ins, **kwargs):
     return m.get_eps_out(eps_ins[0], eps_ins[1]).type_as(eps_ins[0])
 
-def eps_conversion_pact_mean(m : nn.Module, *eps_ins, **kwargs):
+
+def eps_conversion_pact_mean(m: nn.Module, *eps_ins, **kwargs):
     return eps_ins[0]
 
-def eps_conversion_pact_constwrap(m : nn.Module, *eps_ins, **kwargs):
+
+def eps_conversion_pact_constwrap(m: nn.Module, *eps_ins, **kwargs):
     return m.eps.type_as(eps_ins[0])
 
-def eps_conversion_pact_integeradd(m : nn.Module, *eps_ins, **kwargs):
+
+def eps_conversion_pact_integeradd(m: nn.Module, *eps_ins, **kwargs):
     return m.act_out.get_eps().type_as(eps_ins[0])
 
-def eps_conversion_embedding(m : nn.Module, eps_in : torch.Tensor, **kwargs):
+
+def eps_conversion_embedding(m: nn.Module, eps_in: torch.Tensor, **kwargs):
     return m.adder.act_out.get_eps().type_as(eps_in)
 
-def eps_conversion_PACTWrapModule(m : nn.Module, *eps_in):
+
+def eps_conversion_PACTWrapModule(m: nn.Module, *eps_in):
     if m.quantize:
         return m.statTracker.get_eps()
     else:
         return eps_in[0]
 
-def eps_conversion_mul(m : nn.Module, *eps_in, **kwargs):
+
+def eps_conversion_mul(m: nn.Module, *eps_in, **kwargs):
     return eps_in[0] * eps_in[1].type_as(eps_in[0])
 
-def eps_conversion_first_in(m : nn.Module, *eps_in, **kwargs):
+
+def eps_conversion_first_in(m: nn.Module, *eps_in, **kwargs):
     if len(eps_in) > 0:
         return eps_in[0]
     return eps_in
 
+
 _EPS_CONVERSIONS = {
-    '_CALL_METHOD_contiguous' : eps_conversion_identity,
-    '_CALL_METHOD_reshape' : eps_conversion_identity,
-    '_CALL_METHOD_transpose' : eps_conversion_identity,
-    '_CALL_METHOD_view' : eps_conversion_identity,
-
-    f'_CALL_FUNCTION_{repr(getattr)}' : eps_conversion_first_in,
-    f'_CALL_FUNCTION_{repr(operator.getitem)}' : eps_conversion_first_in,
-    f'_CALL_FUNCTION_{repr(operator.matmul)}' : eps_conversion_matmul,
-    f'_CALL_FUNCTION_{repr(torch.bmm)}' : eps_conversion_matmul,
-    f'_CALL_FUNCTION_{repr(torch.matmul)}' : eps_conversion_matmul,
-    f'_CALL_FUNCTION_{repr(torch.transpose)}' : eps_conversion_identity,
-
-    nn.Conv1d : eps_conversion_invalid,
-    nn.Conv2d : eps_conversion_invalid,
-    nn.Conv3d : eps_conversion_invalid,
+    '_CALL_METHOD_contiguous': eps_conversion_identity,
+    '_CALL_METHOD_reshape': eps_conversion_identity,
+    '_CALL_METHOD_transpose': eps_conversion_identity,
+    '_CALL_METHOD_view': eps_conversion_identity,
+    f'_CALL_FUNCTION_{repr(getattr)}': eps_conversion_first_in,
+    f'_CALL_FUNCTION_{repr(operator.getitem)}': eps_conversion_first_in,
+    f'_CALL_FUNCTION_{repr(operator.matmul)}': eps_conversion_matmul,
+    f'_CALL_FUNCTION_{repr(torch.bmm)}': eps_conversion_matmul,
+    f'_CALL_FUNCTION_{repr(torch.matmul)}': eps_conversion_matmul,
+    f'_CALL_FUNCTION_{repr(torch.transpose)}': eps_conversion_identity,
+    nn.Conv1d: eps_conversion_invalid,
+    nn.Conv2d: eps_conversion_invalid,
+    nn.Conv3d: eps_conversion_invalid,
     nn.Linear: eps_conversion_invalid,
     nn.Dropout: eps_conversion_first_in,
     nn.MaxPool1d: eps_conversion_first_in,
     nn.MaxPool2d: eps_conversion_first_in,
     nn.BatchNorm1d: eps_conversion_first_in,
     nn.BatchNorm2d: eps_conversion_first_in,
-
-    Multiply : eps_conversion_mul,
-
-    PACTAsymmetricAct : eps_conversion_pact_acts,
+    Multiply: eps_conversion_mul,
+    PACTAsymmetricAct: eps_conversion_pact_acts,
     PACTConstWrap: eps_conversion_pact_constwrap,
-    PACTConv1d : eps_conversion_pact_linears,
-    PACTConv2d : eps_conversion_pact_linears,
-    PACTDiv : eps_conversion_truediv,
-    PACTEmbedding : eps_conversion_embedding,
-    PACTGELU : eps_conversion_pact_gelu,
+    PACTConv1d: eps_conversion_pact_linears,
+    PACTConv2d: eps_conversion_pact_linears,
+    PACTDiv: eps_conversion_truediv,
+    PACTEmbedding: eps_conversion_embedding,
+    PACTGELU: eps_conversion_pact_gelu,
     # The hardswish/hardsigmoid activations behave like linears
-    PACTHardsigmoid : eps_conversion_pact_linears,
-    PACTHardswish : eps_conversion_pact_linears,
+    PACTHardsigmoid: eps_conversion_pact_linears,
+    PACTHardswish: eps_conversion_pact_linears,
     PACTITAMax: eps_conversion_pact_softmax,
     PACTITAPartialMax: eps_conversion_pact_softmax,
-    PACTLayerNorm : eps_conversion_pact_layernorm,
-    PACTRMSNorm : eps_conversion_pact_layernorm,
+    PACTLayerNorm: eps_conversion_pact_layernorm,
+    PACTRMSNorm: eps_conversion_pact_layernorm,
     PACTMean: eps_conversion_pact_mean,
-    PACTSoftmax : eps_conversion_pact_softmax,
-    PACTUnsignedAct : eps_conversion_pact_acts,
-    PACTWrapModule : eps_conversion_PACTWrapModule,
-    PACTLinear : eps_conversion_pact_linears,
-
-    PACTIntegerAdd : eps_conversion_pact_integeradd,
-    PACTIntegerAddMask : eps_conversion_pact_integeradd,
-    PACTIntegerConcat : eps_conversion_pact_integeradd,
-    PACTIntegerGELU : eps_conversion_pact_gelu,
+    PACTSoftmax: eps_conversion_pact_softmax,
+    PACTUnsignedAct: eps_conversion_pact_acts,
+    PACTWrapModule: eps_conversion_PACTWrapModule,
+    PACTLinear: eps_conversion_pact_linears,
+    PACTIntegerAdd: eps_conversion_pact_integeradd,
+    PACTIntegerAddMask: eps_conversion_pact_integeradd,
+    PACTIntegerConcat: eps_conversion_pact_integeradd,
+    PACTIntegerGELU: eps_conversion_pact_gelu,
     PACTIntegerITAMax: eps_conversion_pact_softmax,
     PACTIntegerITAPartialMax: eps_conversion_pact_softmax,
-    PACTIntegerLayerNorm : eps_conversion_pact_layernorm,
+    PACTIntegerLayerNorm: eps_conversion_pact_layernorm,
     PACTIntegerMatmul: eps_conversion_pact_matmul,
-    PACTIntegerSoftmax : eps_conversion_pact_softmax,
+    PACTIntegerSoftmax: eps_conversion_pact_softmax,
 }
 
 # modules which "generate" an eps without needing an input eps
 _ORIGINAL_EPS_MODULES = (PACTUnsignedAct, PACTAsymmetricAct)
 
-def n_levels_out_invalid(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
+
+def n_levels_out_invalid(m: nn.Module, in_levels: list, accumulator_levels: int = 2**32):
     assert False, f"Module class: {type(m)} does not have a valid n_levels_out getter!"
 
-def n_levels_out_pact_linears(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
+
+def n_levels_out_pact_linears(m: nn.Module, in_levels: list, accumulator_levels: int = 2**32):
     return accumulator_levels
 
-def n_levels_out_truediv(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
+
+def n_levels_out_truediv(m: nn.Module, in_levels: list, accumulator_levels: int = 2**32):
     return accumulator_levels
 
-def n_levels_out_first_in(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
+
+def n_levels_out_first_in(m: nn.Module, in_levels: list, accumulator_levels: int = 2**32):
     return in_levels[0]
 
-def n_levels_out_pact_acts(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
+
+def n_levels_out_pact_acts(m: nn.Module, in_levels: list, accumulator_levels: int = 2**32):
     return m.n_levels
 
-def n_levels_out_pact_embedding(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
+
+def n_levels_out_pact_embedding(m: nn.Module, in_levels: list, accumulator_levels: int = 2**32):
     return m.adder.act_out.n_levels
 
-def n_levels_out_pact_addmask(m : nn.Module, in_levels : list, accumulator_levels : int = 2**32):
+
+def n_levels_out_pact_addmask(m: nn.Module, in_levels: list, accumulator_levels: int = 2**32):
     return in_levels[1]
 
 
 _N_LEVELS_OUT_PROP = {
-    '_CALL_METHOD_contiguous' : n_levels_out_first_in,
-    '_CALL_METHOD_reshape' : n_levels_out_first_in,
-    '_CALL_METHOD_transpose' : n_levels_out_first_in,
-    '_CALL_METHOD_view' : n_levels_out_first_in,
-
-    f'_CALL_FUNCTION_{repr(getattr)}' : n_levels_out_first_in,
-    f'_CALL_FUNCTION_{repr(operator.getitem)}' : n_levels_out_first_in,
-    f'_CALL_FUNCTION_{repr(operator.matmul)}' : n_levels_out_pact_linears,
-    f'_CALL_FUNCTION_{repr(operator.truediv)}' : n_levels_out_truediv,
-    f'_CALL_FUNCTION_{repr(torch.bmm)}' : n_levels_out_pact_linears,
-    f'_CALL_FUNCTION_{repr(torch.matmul)}' : n_levels_out_pact_linears,
-    f'_CALL_FUNCTION_{repr(torch.transpose)}' : n_levels_out_first_in,
-
+    '_CALL_METHOD_contiguous': n_levels_out_first_in,
+    '_CALL_METHOD_reshape': n_levels_out_first_in,
+    '_CALL_METHOD_transpose': n_levels_out_first_in,
+    '_CALL_METHOD_view': n_levels_out_first_in,
+    f'_CALL_FUNCTION_{repr(getattr)}': n_levels_out_first_in,
+    f'_CALL_FUNCTION_{repr(operator.getitem)}': n_levels_out_first_in,
+    f'_CALL_FUNCTION_{repr(operator.matmul)}': n_levels_out_pact_linears,
+    f'_CALL_FUNCTION_{repr(operator.truediv)}': n_levels_out_truediv,
+    f'_CALL_FUNCTION_{repr(torch.bmm)}': n_levels_out_pact_linears,
+    f'_CALL_FUNCTION_{repr(torch.matmul)}': n_levels_out_pact_linears,
+    f'_CALL_FUNCTION_{repr(torch.transpose)}': n_levels_out_first_in,
     nn.BatchNorm1d: n_levels_out_first_in,
     nn.BatchNorm2d: n_levels_out_first_in,
     nn.Dropout: n_levels_out_first_in,
     nn.MaxPool1d: n_levels_out_first_in,
     nn.MaxPool2d: n_levels_out_first_in,
-
-    PACTAsymmetricAct : n_levels_out_pact_acts,
-    PACTConv1d : n_levels_out_pact_linears,
-    PACTConv2d : n_levels_out_pact_linears,
-    PACTEmbedding : n_levels_out_pact_embedding,
-    PACTGELU : n_levels_out_pact_linears,
+    PACTAsymmetricAct: n_levels_out_pact_acts,
+    PACTConv1d: n_levels_out_pact_linears,
+    PACTConv2d: n_levels_out_pact_linears,
+    PACTEmbedding: n_levels_out_pact_embedding,
+    PACTGELU: n_levels_out_pact_linears,
     PACTITAMax: n_levels_out_pact_acts,
     PACTITAPartialMax: n_levels_out_pact_acts,
-    PACTLayerNorm : n_levels_out_pact_acts,
-    PACTRMSNorm : n_levels_out_pact_acts,
-    PACTLinear : n_levels_out_pact_linears,
+    PACTLayerNorm: n_levels_out_pact_acts,
+    PACTRMSNorm: n_levels_out_pact_acts,
+    PACTLinear: n_levels_out_pact_linears,
     PACTMean: n_levels_out_first_in,
-    PACTSoftmax : n_levels_out_pact_acts,
-    PACTUnsignedAct : n_levels_out_pact_acts,
-    PACTWrapModule : n_levels_out_pact_acts,
-
-    PACTIntegerGELU : n_levels_out_pact_acts,
+    PACTSoftmax: n_levels_out_pact_acts,
+    PACTUnsignedAct: n_levels_out_pact_acts,
+    PACTWrapModule: n_levels_out_pact_acts,
+    PACTIntegerGELU: n_levels_out_pact_acts,
     PACTIntegerITAMax: n_levels_out_pact_acts,
     PACTIntegerITAPartialMax: n_levels_out_pact_acts,
     PACTIntegerLayerNorm: n_levels_out_pact_acts,
-    PACTIntegerMatmul : n_levels_out_pact_linears,
-    PACTIntegerSoftmax : n_levels_out_pact_acts,
+    PACTIntegerMatmul: n_levels_out_pact_linears,
+    PACTIntegerSoftmax: n_levels_out_pact_acts,
     PACTIntegerAddMask: n_levels_out_pact_addmask,
 }
 
 always_signed = lambda m, si: True
 always_unsigned = lambda m, si: False
 
-def signed_out_pact_wrap(m : nn.Module, si : list):
+
+def signed_out_pact_wrap(m: nn.Module, si: list):
     return _SIGNED_OUT_PROP[type(m.module)](m.module, si)
 
-def signed_out_or_in_signed(m : nn.Module, si : list):
+
+def signed_out_or_in_signed(m: nn.Module, si: list):
     out_signed = False
     for s in si:
         out_signed = out_signed or s
     return out_signed
 
-def has_signed_attr(m : nn.Module, si : list):
+
+def has_signed_attr(m: nn.Module, si: list):
     return m.signed
 
-def signed_out_first_in(m : nn.Module, si : list):
+
+def signed_out_first_in(m: nn.Module, si: list):
     return si[0]
 
+
 _SIGNED_OUT_PROP = {
-    '_CALL_METHOD_contiguous' : signed_out_first_in,
-    '_CALL_METHOD_reshape' : signed_out_first_in,
-    '_CALL_METHOD_transpose' : signed_out_first_in,
-    '_CALL_METHOD_view' : signed_out_first_in,
-
-    f'_CALL_FUNCTION_{repr(getattr)}' : signed_out_first_in,
-    f'_CALL_FUNCTION_{repr(operator.add)}' : signed_out_or_in_signed,
-    f'_CALL_FUNCTION_{repr(operator.getitem)}' : signed_out_first_in,
-    f'_CALL_FUNCTION_{repr(torch.bmm)}' : signed_out_or_in_signed,
-    f'_CALL_FUNCTION_{repr(torch.matmul)}' : always_signed,
-    f'_CALL_FUNCTION_{repr(torch.transpose)}' : signed_out_first_in,
-
-    nn.AdaptiveAvgPool1d : signed_out_or_in_signed,
-    nn.AdaptiveAvgPool2d : signed_out_or_in_signed,
-    nn.AdaptiveMaxPool1d : signed_out_or_in_signed,
-    nn.AdaptiveMaxPool2d : signed_out_or_in_signed,
-    nn.AvgPool1d : signed_out_or_in_signed,
-    nn.AvgPool2d : signed_out_or_in_signed,
-    nn.BatchNorm1d : always_signed,
-    nn.BatchNorm2d : always_signed,
-    nn.Conv1d : always_signed,
-    nn.Conv2d : always_signed,
+    '_CALL_METHOD_contiguous': signed_out_first_in,
+    '_CALL_METHOD_reshape': signed_out_first_in,
+    '_CALL_METHOD_transpose': signed_out_first_in,
+    '_CALL_METHOD_view': signed_out_first_in,
+    f'_CALL_FUNCTION_{repr(getattr)}': signed_out_first_in,
+    f'_CALL_FUNCTION_{repr(operator.add)}': signed_out_or_in_signed,
+    f'_CALL_FUNCTION_{repr(operator.getitem)}': signed_out_first_in,
+    f'_CALL_FUNCTION_{repr(torch.bmm)}': signed_out_or_in_signed,
+    f'_CALL_FUNCTION_{repr(torch.matmul)}': always_signed,
+    f'_CALL_FUNCTION_{repr(torch.transpose)}': signed_out_first_in,
+    nn.AdaptiveAvgPool1d: signed_out_or_in_signed,
+    nn.AdaptiveAvgPool2d: signed_out_or_in_signed,
+    nn.AdaptiveMaxPool1d: signed_out_or_in_signed,
+    nn.AdaptiveMaxPool2d: signed_out_or_in_signed,
+    nn.AvgPool1d: signed_out_or_in_signed,
+    nn.AvgPool2d: signed_out_or_in_signed,
+    nn.BatchNorm1d: always_signed,
+    nn.BatchNorm2d: always_signed,
+    nn.Conv1d: always_signed,
+    nn.Conv2d: always_signed,
     nn.Dropout: signed_out_first_in,
-    nn.Linear : always_signed,
-    nn.MaxPool1d : signed_out_or_in_signed,
-    nn.MaxPool2d : signed_out_or_in_signed,
-
-    BBAct : has_signed_attr,
-    BBConv2d : always_signed,
-
-    PACTAsymmetricAct : always_signed,
-    PACTConv1d : always_signed,
-    PACTConv2d : always_signed,
-    PACTGELU : always_signed,
+    nn.Linear: always_signed,
+    nn.MaxPool1d: signed_out_or_in_signed,
+    nn.MaxPool2d: signed_out_or_in_signed,
+    BBAct: has_signed_attr,
+    BBConv2d: always_signed,
+    PACTAsymmetricAct: always_signed,
+    PACTConv1d: always_signed,
+    PACTConv2d: always_signed,
+    PACTGELU: always_signed,
     PACTITAMax: always_unsigned,
-
     PACTITAPartialMax: always_unsigned,
-    PACTLinear : always_signed,
+    PACTLinear: always_signed,
     PACTMean: signed_out_or_in_signed,
-    PACTSoftmax : always_unsigned,
-    PACTUnsignedAct : always_unsigned,
-    PACTWrapModule : signed_out_pact_wrap,
+    PACTSoftmax: always_unsigned,
+    PACTUnsignedAct: always_unsigned,
+    PACTWrapModule: signed_out_pact_wrap,
     PACTLayerNorm: always_signed,
-
-    PACTIntegerAdd : signed_out_or_in_signed,
-    PACTIntegerAddMask : signed_out_or_in_signed,
-    PACTIntegerGELU : always_signed,
+    PACTIntegerAdd: signed_out_or_in_signed,
+    PACTIntegerAddMask: signed_out_or_in_signed,
+    PACTIntegerGELU: always_signed,
     PACTIntegerITAMax: always_unsigned,
     PACTIntegerITAPartialMax: always_unsigned,
     PACTIntegerLayerNorm: always_signed,
-    PACTIntegerMatmul : signed_out_or_in_signed,
+    PACTIntegerMatmul: signed_out_or_in_signed,
     PACTIntegerMean: signed_out_or_in_signed,
-    PACTIntegerSoftmax : always_unsigned,
+    PACTIntegerSoftmax: always_unsigned,
 }
+
+
 @dataclass
 class QuantInfo:
-    eps_in : torch.Tensor
-    eps_out : torch.Tensor
-    n_levels_in : list
-    n_levels_out : int
-    signed_in : list
-    signed_out : bool
+    eps_in: torch.Tensor
+    eps_out: torch.Tensor
+    n_levels_in: list
+    n_levels_out: int
+    signed_in: list
+    signed_out: bool
+
 
 class AnnotateEpsPass(FxPass):
-    def __init__(self, eps_in : Optional[Union[torch.Tensor, float]], n_levels_in : Optional[int] = 256, accumulator_levels : int = 2**32, signed_in : bool = True, prop_eps : bool = True, prop_n_levels : bool = True, prop_sign : bool = True, verbose=False, eps_prop_funcs = _EPS_CONVERSIONS, n_levels_prop_funcs = _N_LEVELS_OUT_PROP, signed_prop_funcs = _SIGNED_OUT_PROP):
+
+    def __init__(self,
+                 eps_in: Optional[Union[torch.Tensor, float]],
+                 n_levels_in: Optional[int] = 256,
+                 accumulator_levels: int = 2**32,
+                 signed_in: bool = True,
+                 prop_eps: bool = True,
+                 prop_n_levels: bool = True,
+                 prop_sign: bool = True,
+                 verbose = False,
+                 eps_prop_funcs = _EPS_CONVERSIONS,
+                 n_levels_prop_funcs = _N_LEVELS_OUT_PROP,
+                 signed_prop_funcs = _SIGNED_OUT_PROP):
         super(AnnotateEpsPass, self).__init__()
         self.verbose = verbose
 
@@ -361,20 +387,27 @@ class AnnotateEpsPass(FxPass):
     def _get_parents_signed_out(node: fx.node.Node) -> List:
         return [inp.meta['quant'].signed_out for inp in node.args[0]]
 
-    def run_pass(self, gm : fx.GraphModule):
-        modules = gm_modules(gm)
+    def run_pass(self, gm: fx.GraphModule):
+        gm_modules(gm)
         placeHolderIdx = 0
         for node in gm.graph.nodes:
             if node.op == 'placeholder':
 
-                node.meta['quant'] = QuantInfo(eps_in=[self.eps_in[placeHolderIdx]], eps_out=self.eps_in[placeHolderIdx], n_levels_in=self.n_levels_in, n_levels_out=self.n_levels_in, signed_in=[self.signed_in], signed_out=self.signed_in)
+                node.meta['quant'] = QuantInfo(eps_in = [self.eps_in[placeHolderIdx]],
+                                               eps_out = self.eps_in[placeHolderIdx],
+                                               n_levels_in = self.n_levels_in,
+                                               n_levels_out = self.n_levels_in,
+                                               signed_in = [self.signed_in],
+                                               signed_out = self.signed_in)
                 # an equivalent for noeps for signedness is not yet supported...
 
                 placeHolderIdx += 1
 
                 for u in node.users:
                     if self.noeps and self.prop_eps:
-                        assert u.op == 'call_module' and isinstance(module_of_node(gm, u), _ORIGINAL_EPS_MODULES), "If no eps is provided to annotate_eps, all users of placeholder nodes must be in _ORIGINAL_EPS_MODULES!"
+                        assert u.op == 'call_module' and isinstance(
+                            module_of_node(gm, u), _ORIGINAL_EPS_MODULES
+                        ), "If no eps is provided to annotate_eps, all users of placeholder nodes must be in _ORIGINAL_EPS_MODULES!"
                     #u.meta['quant'] = QuantInfo(eps_in=torch.tensor(1.0), eps_out=torch.tensor(-1.0))
             elif node.op == 'output':
                 continue
@@ -400,8 +433,10 @@ class AnnotateEpsPass(FxPass):
                         arg_eps_ins = [i.meta['quant'].eps_out for i in node.args if isinstance(i, fx.Node)]
                         other_args = [i for i in node.args if not isinstance(i, fx.Node)]
 
-                    kwarg_eps_ins = {k : v.meta['quant'].eps_out for k, v in node.kwargs.items() if isinstance(v, fx.Node)}
-                    other_kwargs = {k : v for k, v in node.kwargs.items() if not isinstance(v, fx.Node)}
+                    kwarg_eps_ins = {
+                        k: v.meta['quant'].eps_out for k, v in node.kwargs.items() if isinstance(v, fx.Node)
+                    }
+                    other_kwargs = {k: v for k, v in node.kwargs.items() if not isinstance(v, fx.Node)}
                     conversion_kwargs = copy.copy(other_kwargs)
                     conversion_kwargs.update(other_kwargs)
                     all_eps = arg_eps_ins + [v for v in kwarg_eps_ins.values()]
@@ -418,9 +453,14 @@ class AnnotateEpsPass(FxPass):
                             print(f"[AnnotateEpsPass] Key {k} not found in _EPS_CONVERSIONS!")
                         eps_diffs = [torch.abs(e1 - e2) for e1, e2 in zip(all_eps[:-1], all_eps[1:])]
                         if not all(d < 1e-8 for d in eps_diffs):
-                            print("[AnnotateEpsPass] Mismatching input epsilons in node with no eps propagation function! Eps propagation will likely be wrong!")
+                            print(
+                                "[AnnotateEpsPass] Mismatching input epsilons in node with no eps propagation function! Eps propagation will likely be wrong!"
+                            )
                             print(f"                    -> Node: {node.name}, Key: {k}, eps_in: {all_eps}")
-                            if (self.verbose): print(f"[AnnotateEpsPass] Using identity epsilon propagation on node with op {node.op}, target {node.target}!")
+                            if (self.verbose):
+                                print(
+                                    f"[AnnotateEpsPass] Using identity epsilon propagation on node with op {node.op}, target {node.target}!"
+                                )
 
                         if node.op == "call_function" and node.target == torch.cat:
                             all_eps = self._get_parents_eps_out(node)
@@ -442,9 +482,14 @@ class AnnotateEpsPass(FxPass):
                             print(f"[AnnotateEpsPass] Key {k} not found in _N_LEVELS_OUT_PROP!")
                         in_levels_diffs = [abs(l1 - l2) for l1, l2 in zip(node_in_levels[:-1], node_in_levels[1:])]
                         if not all(d < 1e-8 for d in in_levels_diffs):
-                            print("[AnnotateEpsPass] Mismatching input n_levels in node with no n_levels_out propagation function! n_levels propagation will likely be wrong!")
+                            print(
+                                "[AnnotateEpsPass] Mismatching input n_levels in node with no n_levels_out propagation function! n_levels propagation will likely be wrong!"
+                            )
                             print(f"                    -> Node: {node.name}, Key: {k}, n_levels_in: {node_in_levels}")
-                            if (self.verbose): print(f"[AnnotateEpsPass] Using identity n_level propagation on node with op {node.op}, target {node.target}!")
+                            if (self.verbose):
+                                print(
+                                    f"[AnnotateEpsPass] Using identity n_level propagation on node with op {node.op}, target {node.target}!"
+                                )
 
                         if node.op == "call_function" and node.target == torch.cat:
                             node_in_levels = self._get_parents_n_levels_out(node)
@@ -466,9 +511,14 @@ class AnnotateEpsPass(FxPass):
                             print(f"[AnnotateEpsPass] Key {k} not found in _SIGNED_OUT_PROP!")
                         in_singed_diffs = [abs(s1 - s2) for s1, s2 in zip(node_in_signed[:-1], node_in_signed[1:])]
                         if not all(d < 1e-8 for d in in_singed_diffs):
-                            print("[AnnotateEpsPass] Mismatching input signedness in node with no signedness propagation function! signedness propagation will likely be wrong!")
+                            print(
+                                "[AnnotateEpsPass] Mismatching input signedness in node with no signedness propagation function! signedness propagation will likely be wrong!"
+                            )
                             print(f"                    -> Node: {node.name}, Key: : {k}, signed_in: {node_in_signed}")
-                            if (self.verbose): print(f"[AnnotateEpsPass] Using identity signed propagation on node with op {node.op}, target {node.target}!")
+                            if (self.verbose):
+                                print(
+                                    f"[AnnotateEpsPass] Using identity signed propagation on node with op {node.op}, target {node.target}!"
+                                )
 
                         if node.op == "call_function" and node.target == torch.cat:
                             node_in_signed = self._get_parents_signed_out(node)
@@ -477,8 +527,12 @@ class AnnotateEpsPass(FxPass):
                 else:
                     node_in_signed = None
                     node_out_signed = None
-                node.meta['quant'] = QuantInfo(eps_in=eps_in, eps_out=eps_out, n_levels_in=node_in_levels, n_levels_out=node_out_levels, signed_in=node_in_signed, signed_out=node_out_signed)
-
+                node.meta['quant'] = QuantInfo(eps_in = eps_in,
+                                               eps_out = eps_out,
+                                               n_levels_in = node_in_levels,
+                                               n_levels_out = node_out_levels,
+                                               signed_in = node_in_signed,
+                                               signed_out = node_out_signed)
 
         return gm
 

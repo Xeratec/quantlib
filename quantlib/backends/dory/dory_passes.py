@@ -6,8 +6,6 @@ import torch
 from torch import nn, fx
 from torch.fx.subgraph_rewriter import Match
 from torch.nn.modules.utils import _single, _pair, _triple
-from torch.onnx.symbolic_helper import parse_args
-
 
 from quantlib.algorithms.pact import RequantShift
 from quantlib.editing.fx.passes import SequentialPass, ReplaceSequentialPatternPass, ShapePropPass
@@ -22,18 +20,19 @@ class AvgPoolWrap(nn.Sequential):
         super(AvgPoolWrap, self).__init__(*args)
 
 
-
 class RemoveRedundantGlobalPoolingPass(SequentialPass):
-    GLOBAL_POOL_CLS = (nn.AdaptiveAvgPool1d,
-                       nn.AdaptiveAvgPool2d,
-                       nn.AdaptiveAvgPool3d,
-                       nn.AdaptiveMaxPool1d,
-                       nn.AdaptiveMaxPool2d,
-                       nn.AdaptiveMaxPool3d,)
+    GLOBAL_POOL_CLS = (
+        nn.AdaptiveAvgPool1d,
+        nn.AdaptiveAvgPool2d,
+        nn.AdaptiveAvgPool3d,
+        nn.AdaptiveMaxPool1d,
+        nn.AdaptiveMaxPool2d,
+        nn.AdaptiveMaxPool3d,
+    )
 
     # global avg/max pooling layers that don't do anything
     @staticmethod
-    def remove_redundant_pool(gm : fx.GraphModule, match : Match):
+    def remove_redundant_pool(gm: fx.GraphModule, match: Match):
         n = get_ordered_active_nodes(match)
         m = [module_of_node(gm, node) for node in n]
         if isinstance(m[0], RemoveRedundantGlobalPoolingPass.GLOBAL_POOL_CLS):
@@ -47,7 +46,6 @@ class RemoveRedundantGlobalPoolingPass(SequentialPass):
             # if the pooling layer does something, return a copy of it
             return deepcopy(m[0])
 
-
     def __init__(self):
         passes = []
         name = "REMOVE_REDUNDANT_POOLING"
@@ -57,17 +55,14 @@ class RemoveRedundantGlobalPoolingPass(SequentialPass):
 
         super(RemoveRedundantGlobalPoolingPass, self).__init__(*passes)
 
+
 class AlignAvgPoolPass(SequentialPass):
-    GLOBAL_AVGPOOL_CLS = (nn.AdaptiveAvgPool1d,
-                       nn.AdaptiveAvgPool2d,
-                       nn.AdaptiveAvgPool3d)
-    AVGPOOL_CLS = (nn.AvgPool1d,
-                   nn.AvgPool2d,
-                   nn.AvgPool3d)
+    GLOBAL_AVGPOOL_CLS = (nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d)
+    AVGPOOL_CLS = (nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d)
     # the purpose of this pass is to align the 'mul' attribute of a
     # requantShift node to the total kernel size
     @staticmethod
-    def align_and_wrap_avg_pool(gm : fx.GraphModule, match : Match):
+    def align_and_wrap_avg_pool(gm: fx.GraphModule, match: Match):
         n = get_ordered_active_nodes(match)
         m = [module_of_node(gm, node) for node in n]
         if isinstance(m[0], AlignAvgPoolPass.GLOBAL_AVGPOOL_CLS):
@@ -81,7 +76,7 @@ class AlignAvgPoolPass(SequentialPass):
             ks_tot = 1
             for i, (in_d, out_d) in enumerate(zip(shape_in, shape_out)):
                 assert in_d % out_d == 0, "AlignAvgPoolPass: Non-integer kernel size in dimension {i} - in_dim {in_d}, out_dim {out_d}!"
-                ks_tot *= (in_d//out_d)
+                ks_tot *= (in_d // out_d)
         elif isinstance(m[0], AlignAvgPoolPass.AVGPOOL_CLS):
             dim = int(m[0].__class__.__name__[-2])
             if dim == 1:
@@ -98,7 +93,7 @@ class AlignAvgPoolPass(SequentialPass):
         # this is why we do this pass in the first place: for bit-true
         # inference, the `mul` attribute must be aligned to the total kernel
         # size
-        new_rqs.mul.data = torch.round(new_rqs.mul.data/ks_tot)*ks_tot
+        new_rqs.mul.data = torch.round(new_rqs.mul.data / ks_tot) * ks_tot
         return AvgPoolWrap(new_avgpool, new_rqs)
 
     def __init__(self):
@@ -109,14 +104,16 @@ class AlignAvgPoolPass(SequentialPass):
             if 'Global' in ap_cls.__name__:
                 name = "GLOBAL_" + name
             pattern = nn.Sequential(ap_cls(1), RequantShift(torch.zeros([]), torch.zeros([]), 256))
-            passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, self.align_and_wrap_avg_pool, name))
+            passes.append(ReplaceSequentialPatternPass(pattern, PACT_symbolic_trace, self.align_and_wrap_avg_pool,
+                                                       name))
 
         super(AlignAvgPoolPass, self).__init__(*passes)
 
 
-
 class DORYAdder(nn.Module):
+
     class DORYAdderFun(torch.autograd.Function):
+
         @staticmethod
         def forward(ctx, x1, x2, params):
             # 'params' should contain requantization parameters for both inputs
@@ -127,34 +124,45 @@ class DORYAdder(nn.Module):
             # the 'i' stands for 'integer', it is used in ONNX export (see
             # symbolic function) to indicate that the respective parameter is
             # in fact an integer. In the exported graph, the '_i' suffix is
-            # discarded. 
-            params_x1 = {k[4:]:torch.tensor(v) for k,v in params.items() if k.startswith('in1')}
+            # discarded.
+            params_x1 = {k[4:]: torch.tensor(v) for k, v in params.items() if k.startswith('in1')}
             if params_x1['rq_i']:
-                x1 = RequantShift.MyRequantShift.forward(None, x1, params_x1['mul_i'], params_x1['add_i'], int(2**params_x1['shift_i']), params_x1['signed_i'], params_x1['n_levels_i'], False)
+                x1 = RequantShift.MyRequantShift.forward(None, x1, params_x1['mul_i'], params_x1['add_i'],
+                                                         int(2**params_x1['shift_i']), params_x1['signed_i'],
+                                                         params_x1['n_levels_i'], False)
 
-            params_x2 = {k[4:]:torch.tensor(v) for k,v in params.items() if k.startswith('in2')}
+            params_x2 = {k[4:]: torch.tensor(v) for k, v in params.items() if k.startswith('in2')}
             if params_x2['rq_i']:
-                x2 = RequantShift.MyRequantShift.forward(None, x2, params_x2['mul_i'], params_x2['add_i'], int(2**params_x2['shift_i']), params_x2['signed_i'], params_x2['n_levels_i'], False)
+                x2 = RequantShift.MyRequantShift.forward(None, x2, params_x2['mul_i'], params_x2['add_i'],
+                                                         int(2**params_x2['shift_i']), params_x2['signed_i'],
+                                                         params_x2['n_levels_i'], False)
             x_sum = x1 + x2
 
             #if rq_out:
-                #x_sum = rq_out(x_sum)
-            params_x_sum = {k[4:]:torch.tensor(v) for k,v in params.items() if k.startswith('out')}
+            #x_sum = rq_out(x_sum)
+            params_x_sum = {k[4:]: torch.tensor(v) for k, v in params.items() if k.startswith('out')}
             if params_x_sum['rq_i']:
-                x_sum = RequantShift.MyRequantShift.forward(None, x_sum, params_x_sum['mul_i'], params_x_sum['add_i'], int(2**params_x_sum['shift_i']), params_x_sum['signed_i'], params_x_sum['n_levels_i'], False)
+                x_sum = RequantShift.MyRequantShift.forward(None, x_sum, params_x_sum['mul_i'], params_x_sum['add_i'],
+                                                            int(2**params_x_sum['shift_i']), params_x_sum['signed_i'],
+                                                            params_x_sum['n_levels_i'], False)
 
             return x_sum
 
         @staticmethod
         def symbolic(g, x1, x2, params):
             # 'in{1/2}_signed' are inferred automatically by DORY
-            params = {k:v for k,v in params.items() if k not in ['in1_signed', 'in2_signed']}
+            params = {k: v for k, v in params.items() if k not in ['in1_signed', 'in2_signed']}
             ret = g.op("Add", x1, x2, **params)
             ret.setType(x1.type())
             return ret
 
-
-    def __init__(self, in1_requant : Optional[nn.Module], in2_requant : Optional[nn.Module], out_requant : Optional[nn.Module], in1_n_levels : int = 256, in2_n_levels : int = 256, out_n_levels : int = 256):
+    def __init__(self,
+                 in1_requant: Optional[nn.Module],
+                 in2_requant: Optional[nn.Module],
+                 out_requant: Optional[nn.Module],
+                 in1_n_levels: int = 256,
+                 in2_n_levels: int = 256,
+                 out_n_levels: int = 256):
         super(DORYAdder, self).__init__()
         self.in1_requant = in1_requant
         self.in2_requant = in2_requant
@@ -162,7 +170,6 @@ class DORYAdder(nn.Module):
         self.in1_n_levels = in1_n_levels
         self.in2_n_levels = in2_n_levels
         self.out_n_levels = out_n_levels
-
 
     def forward(self, x1, x2):
         params = {}
@@ -195,10 +202,10 @@ class DORYAdder(nn.Module):
 
 
 class DORYReplaceAddersPass(OpTreeReplacementPass):
-    add_node_specs = [('call_function', (torch.add, operator.add)),
-                      ('call_method', ('add',))]
+    add_node_specs = [('call_function', (torch.add, operator.add)), ('call_method', ('add',))]
 
-    mergeable_modules = (nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.Linear, nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d, nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d)
+    mergeable_modules = (nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.Linear, nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d,
+                         nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d)
 
     requanting_modules = (DORYAdder,)
 
@@ -212,7 +219,7 @@ class DORYReplaceAddersPass(OpTreeReplacementPass):
     # the appropriate inputs (and the output if appropriate)
     # 4. delete those requantization nodes which are absorbed into the adder
     @staticmethod
-    def get_input_requant(gm : fx.GraphModule, n : fx.Node):
+    def get_input_requant(gm: fx.GraphModule, n: fx.Node):
         # if the input to an adder performs requantization by itself (currently
         # only done by DORYAdders), nothing needs to be done
         rq_module = module_of_node(gm, n)
@@ -229,8 +236,7 @@ class DORYReplaceAddersPass(OpTreeReplacementPass):
             return (int(rq_module.n_levels_out), None)
         return n, module_of_node(gm, n)
 
-
-    def dory_replace_adder(self, gm : fx.GraphModule, tree : OpTree):
+    def dory_replace_adder(self, gm: fx.GraphModule, tree: OpTree):
         # DORY only supports 2-input adders for now
         if len(tree.args) < 2:
             print(f"Warning: DORYReplaceAdderPass got a strange adder with <2 ({len(tree.args)}) inputs...")
@@ -247,27 +253,33 @@ class DORYReplaceAddersPass(OpTreeReplacementPass):
         in_n_levels = [in_rq[0] if in_rq[1] is None else in_rq[1].n_levels_out for in_rq in inp_requants]
         self.in_requant_nodes += [ir[0] for ir in inp_requants if ir[1] is not None]
         out_requant_module = None
-        if len(tree.users) == 1 and tree.users[0].op == "call_module" and isinstance(module_of_node(gm, tree.users[0]), RequantShift):
+        if len(tree.users) == 1 and tree.users[0].op == "call_module" and isinstance(
+                module_of_node(gm, tree.users[0]), RequantShift):
             self.out_requant_nodes.append(tree.users[0])
             out_requant_module = module_of_node(gm, tree.users[0])
             out_n_levels = out_requant_module.n_levels_out
         else:
             out_n_levels = max(in_n_levels)
 
-        return DORYAdder(in1_requant=deepcopy(inp_requants[0][1]), in2_requant=deepcopy(inp_requants[1][1]), out_requant=out_requant_module, in1_n_levels=in_n_levels[0], in2_n_levels=in_n_levels[1], out_n_levels=out_n_levels)
-
+        return DORYAdder(in1_requant = deepcopy(inp_requants[0][1]),
+                         in2_requant = deepcopy(inp_requants[1][1]),
+                         out_requant = out_requant_module,
+                         in1_n_levels = in_n_levels[0],
+                         in2_n_levels = in_n_levels[1],
+                         out_n_levels = out_n_levels)
 
     def __init__(self):
-        super(DORYReplaceAddersPass, self).__init__(node_specs=self.add_node_specs,
-                                                    replacement_fn=self.dory_replace_adder,
-                                                    name="DORY_ADDER",
-                                                    always_terminate=True)
+        super(DORYReplaceAddersPass, self).__init__(node_specs = self.add_node_specs,
+                                                    replacement_fn = self.dory_replace_adder,
+                                                    name = "DORY_ADDER",
+                                                    always_terminate = True)
         self.in_requant_nodes = []
         self.out_requant_nodes = []
 
-    def run_pass(self, gm : fx.GraphModule):
+    def run_pass(self, gm: fx.GraphModule):
         gm = super(DORYReplaceAddersPass, self).run_pass(gm)
-        def remove_node_and_module(gm : fx.GraphModule, n : fx.Node):
+
+        def remove_node_and_module(gm: fx.GraphModule, n: fx.Node):
             assert len(n.all_input_nodes) <= 1, "DORYReplaceAddersPass: Can't remove node with multiple inputs!"
             if len(n.all_input_nodes) == 1:
                 n.replace_all_uses_with(n.all_input_nodes[0])
@@ -284,13 +296,14 @@ class DORYReplaceAddersPass(OpTreeReplacementPass):
 
         return gm
 
-    def retarget(self, gm : fx.GraphModule):
+    def retarget(self, gm: fx.GraphModule):
         # reset the lists of nodes to remove
         self.in_requant_nodes = []
         self.out_requant_nodes = []
 
 
 class DORYHarmonizePass(SequentialPass):
+
     def __init__(self, in_shape):
         passes = []
         passes.append(DORYReplaceAddersPass())

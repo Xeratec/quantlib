@@ -20,33 +20,29 @@
 #
 
 from functools import partial
-from itertools import chain 
 from pathlib import Path
 import json
-
 
 import torch
 
 from torch import nn, fx
-import torchvision
 
 import onnx
 import numpy as np
 
-
-
 import quantlib.editing.fx as qlfx
 from quantlib.editing.fx.util import module_of_node
-from quantlib.editing.fx.passes.pact import PACT_symbolic_trace
 from quantlib.editing.lightweight import LightweightGraph
-from quantlib.algorithms.pact import RequantShift, PACTIntegerLayerNorm, PACTIntegerGELU, PACTWrapMHSA, PACTWrapModule, ChannelwiseThreshold
+from quantlib.algorithms.pact import RequantShift, PACTIntegerLayerNorm, PACTIntegerGELU, PACTWrapMHSA
 from .dory_passes import AvgPoolWrap, DORYAdder, DORYHarmonizePass
 
-def get_input_channels(net : fx.GraphModule):
+
+def get_input_channels(net: fx.GraphModule):
     for node in net.graph.nodes:
         if node.op == 'call_module' and isinstance(module_of_node(net, node), (nn.Conv1d, nn.Conv2d)):
             conv = module_of_node(net, node)
             return conv.in_channels
+
 
 # annotate:
 #   conv, FC nodes:
@@ -61,7 +57,6 @@ def get_input_channels(net : fx.GraphModule):
 #     - 'add_bits' - this describes the added number's as well as the result's precision
 
 
-
 def get_attr_by_name(node, name):
     try:
         a = [attr for attr in node.attribute if attr.name == name][0]
@@ -70,32 +65,32 @@ def get_attr_by_name(node, name):
     return a
 
 
-def annotate_onnx(m, prec_dict : dict, requant_bits : int = 32):
+def annotate_onnx(m, prec_dict: dict, requant_bits: int = 32):
 
-# annotate all clip nodes - use the clip limits to determine the number of
-# bits; in a properly exported model this would be done based on
-# meta-information contained in the pytorch graph.
+    # annotate all clip nodes - use the clip limits to determine the number of
+    # bits; in a properly exported model this would be done based on
+    # meta-information contained in the pytorch graph.
     clip_nodes = [n for n in m.graph.node if n.op_type == "Clip"]
     for i, n in enumerate(clip_nodes):
         lower = get_attr_by_name(n, "min").f
         #assert lower == 0.0, "clip node {} has lower clip bound {} not equal to zero!".format(n.name, lower)
         upper = get_attr_by_name(n, "max").f
-        n_bits = int(np.round(np.log2(upper-lower+1.0)))
+        n_bits = int(np.round(np.log2(upper - lower + 1.0)))
         n_bits = n_bits if n_bits <= 8 else 32
-        precision_attr = onnx.helper.make_attribute(key='out_bits', value=n_bits)
+        precision_attr = onnx.helper.make_attribute(key = 'out_bits', value = n_bits)
         n.attribute.append(precision_attr)
-
 
     conv_fc_nodes = [n for n in m.graph.node if n.op_type in ['Conv', 'Gemm', 'MatMul']]
     for n in conv_fc_nodes:
         if n.op_type == 'MatMul':
-            import ipdb; ipdb.set_trace()
+            import ipdb
+            ipdb.set_trace()
         weight_name = n.input[1].rstrip('.weight')
         weight_bits = prec_dict[weight_name]
-        weight_attr = onnx.helper.make_attribute(key='weight_bits', value=weight_bits)
+        weight_attr = onnx.helper.make_attribute(key = 'weight_bits', value = weight_bits)
         n.attribute.append(weight_attr)
         # bias accuracy hardcoded to 32b.
-        bias_attr = onnx.helper.make_attribute(key='bias_bits', value=32)
+        bias_attr = onnx.helper.make_attribute(key = 'bias_bits', value = 32)
         n.attribute.append(bias_attr)
 
     # assume that add nodes have 32b precision?? not specified in the name...
@@ -103,26 +98,35 @@ def annotate_onnx(m, prec_dict : dict, requant_bits : int = 32):
     # the requantization add nodes are the ones not adding two operation nodes'
     # outputs together
     for n in add_nodes_requant:
-        add_attr = onnx.helper.make_attribute(key='add_bits', value=requant_bits)
+        add_attr = onnx.helper.make_attribute(key = 'add_bits', value = requant_bits)
         n.attribute.append(add_attr)
 
     add_nodes_residual = [n for n in m.graph.node if n.op_type == 'Add' and n not in add_nodes_requant]
     for n in add_nodes_residual:
         # assume that all residual additions are executed in 8b
-        add_attr = onnx.helper.make_attribute(key='add_bits', value=8)
+        add_attr = onnx.helper.make_attribute(key = 'add_bits', value = 8)
         n.attribute.append(add_attr)
 
     mult_nodes = [n for n in m.graph.node if n.op_type == 'Mul']
     for n in mult_nodes:
-        mult_attr = onnx.helper.make_attribute(key='mult_bits', value=requant_bits)
+        mult_attr = onnx.helper.make_attribute(key = 'mult_bits', value = requant_bits)
         n.attribute.append(mult_attr)
 
-def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_data : torch.Tensor, integerize : bool = True, D : float = 2**24, opset_version : int  = 10, align_avg_pool : bool = False, code_size : int = 160000):
+
+def export_net(net: nn.Module,
+               name: str,
+               out_dir: str,
+               eps_in: float,
+               in_data: torch.Tensor,
+               integerize: bool = True,
+               D: float = 2**24,
+               opset_version: int = 10,
+               align_avg_pool: bool = False,
+               code_size: int = 160000):
     net = net.eval()
 
-
     out_path = Path(out_dir)
-    out_path.mkdir(parents=True, exist_ok=True)
+    out_path.mkdir(parents = True, exist_ok = True)
     onnx_file = f"{name}_ql_integerized.onnx"
     onnx_path = out_path.joinpath(onnx_file)
 
@@ -131,16 +135,17 @@ def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_dat
     if integerize:
         net_traced = qlfx.passes.pact.PACT_symbolic_trace(net)
 
-        int_pass = qlfx.passes.pact.IntegerizePACTNetPass(shape_in=shape_in,  eps_in=eps_in, D=D)
+        int_pass = qlfx.passes.pact.IntegerizePACTNetPass(shape_in = shape_in, eps_in = eps_in, D = D)
         net_integerized = int_pass(net_traced)
-    else: # assume the net is already integerized
+    else:  # assume the net is already integerized
         net_integerized = net
 
     if align_avg_pool:
-        align_avgpool_pass = DORYHarmonizePass(in_shape=shape_in)
+        align_avgpool_pass = DORYHarmonizePass(in_shape = shape_in)
         net_integerized = align_avgpool_pass(net_integerized)
 
-    integerized_nodes = LightweightGraph.build_nodes_list(net_integerized, leaf_types=(AvgPoolWrap, DORYAdder, PACTWrapMHSA))
+    integerized_nodes = LightweightGraph.build_nodes_list(net_integerized,
+                                                          leaf_types = (AvgPoolWrap, DORYAdder, PACTWrapMHSA))
 
     # the integerization pass annotates the conv layers with the number of
     # weight levels. from this information we can make a dictionary of the number of
@@ -149,7 +154,7 @@ def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_dat
 
     for lname, module in net_integerized.named_modules():
         if isinstance(module, (nn.Conv1d, nn.Conv2d, nn.Linear)):
-            n_bits = int(np.log2(module.n_levels+1.2))
+            n_bits = int(np.log2(module.n_levels + 1.2))
             prec_dict[lname] = n_bits
 
     #first export an unannotated ONNX graph
@@ -158,12 +163,11 @@ def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_dat
     torch.onnx.export(net_integerized.to('cpu'),
                       test_input,
                       str(onnx_path),
-                      export_params=True,
-                      verbose=False,
-                      opset_version=opset_version,
-                      do_constant_folding=True,
-                      operator_export_type=torch.onnx.OperatorExportTypes.ONNX_FALLTHROUGH)
-
+                      export_params = True,
+                      verbose = False,
+                      opset_version = opset_version,
+                      do_constant_folding = True,
+                      operator_export_type = torch.onnx.OperatorExportTypes.ONNX_FALLTHROUGH)
 
     #load the exported model and annotate it
     onnx_model = onnx.load(str(onnx_path))
@@ -175,32 +179,40 @@ def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_dat
 
     # make a forward hook to dump outputs of RequantShift layers
     acts = []
+
     def dump_hook(self, inp, outp, name):
         # DORY wants HWC tensors
         acts.append((name, torch.floor(outp[0])))
+
     # to correctly export unwrapped averagePool nodes, floor all inputs to all nodes
     def floor_hook(self, inp):
         return tuple(torch.floor(i) for i in inp)
 
     for n in integerized_nodes:
-        if isinstance(n.module, (RequantShift, nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d, nn.AvgPool1d, nn.AvgPool2d, nn.AvgPool3d, nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d, nn.Linear, AvgPoolWrap, DORYAdder, PACTIntegerLayerNorm, PACTIntegerGELU, PACTWrapMHSA)):
-            hook = partial(dump_hook, name=n.name)
+        if isinstance(n.module,
+                      (RequantShift, nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d, nn.AvgPool1d,
+                       nn.AvgPool2d, nn.AvgPool3d, nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d, nn.Linear, AvgPoolWrap,
+                       DORYAdder, PACTIntegerLayerNorm, PACTIntegerGELU, PACTWrapMHSA)):
+            hook = partial(dump_hook, name = n.name)
             n.module.register_forward_hook(hook)
         n.module.register_forward_pre_hook(floor_hook)
 
     # open the supplied input image
     if in_data is not None:
-        im_tensor = in_data.clone().to(dtype=torch.float64)
-        net_integerized = net_integerized.to(dtype=torch.float64)
-        output = net_integerized(im_tensor).to(dtype=torch.float64)
+        im_tensor = in_data.clone().to(dtype = torch.float64)
+        net_integerized = net_integerized.to(dtype = torch.float64)
+        output = net_integerized(im_tensor).to(dtype = torch.float64)
+
         # now, save everything into beautiful text files
-        def save_beautiful_text(t : torch.Tensor, layer_name : str, filename : str):
+        def save_beautiful_text(t: torch.Tensor, layer_name: str, filename: str):
             t = t.squeeze(0)
 
-            if t.dim()==3:
+            if t.dim() == 3:
                 # expect a (C, H, W) tensor - DORY expects (H, W, C)
-                t = t.permute(1,2,0)
+                t = t.permute(1, 2, 0)
             #SCHEREMO: HACK HACK HACK HACK HACK HACK
+
+
 #             elif t.dim()==2:
 #                 # expect a (C, D) tensor - DORY expects (D, C)
 #                 t = t.permute(1,0)
@@ -212,20 +224,22 @@ def export_net(net : nn.Module,name : str, out_dir : str, eps_in : float, in_dat
                 fp.write(f"# {layer_name} (shape {list(t.shape)}),\n")
                 for el in t.flatten():
                     fp.write(f"{int(el)},\n")
+
         save_beautiful_text(im_tensor, "input", "input")
         save_beautiful_text(output, "output", "output")
         for i, (lname, t) in enumerate(acts):
             save_beautiful_text(t, lname, f"out_layer{i}")
 
-
-    cnn_dory_config = {"BNRelu_bits": 32,
-                       "onnx_file": str(onnx_path.resolve()),
-                       "code reserved space": code_size,
-                       "n_inputs": 1,
-                       "input_bits": 8,
-                       "input_signed": True}
+    cnn_dory_config = {
+        "BNRelu_bits": 32,
+        "onnx_file": str(onnx_path.resolve()),
+        "code reserved space": code_size,
+        "n_inputs": 1,
+        "input_bits": 8,
+        "input_signed": True
+    }
 
     with open(out_path.joinpath(f"config_{name}.json"), "w") as fp:
-        json.dump(cnn_dory_config, fp, indent=4)
+        json.dump(cnn_dory_config, fp, indent = 4)
 
     #done!

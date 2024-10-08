@@ -1,30 +1,29 @@
-# 
+#
 # ste_ops.py
-# 
+#
 # Author(s):
 # Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
-# 
+#
 # Copyright (c) 2020-2021 ETH Zurich.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 # http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# 
+#
 
 # Copyright (c) 2019 ETH Zurich, Lukas Cavigelli
 
 import torch
 
 from ..controller import Controller
-
 
 __all__ = [
     'STEController',
@@ -33,7 +32,8 @@ __all__ = [
 
 
 class STEController(Controller):
-    def __init__(self, modules, clear_optim_state_on_step=False):
+
+    def __init__(self, modules, clear_optim_state_on_step = False):
         self.modules = modules
         self.clear_optim_state_on_step = clear_optim_state_on_step
 
@@ -43,7 +43,7 @@ class STEController(Controller):
     def load_state_dict(self, state_dict):
         self.__dict__.update(state_dict)
 
-    def step_pre_training_epoch(self, epoch, optimizer=None, tb_writer=None):
+    def step_pre_training_epoch(self, epoch, optimizer = None, tb_writer = None):
         # step each STE module
         for m in self.modules:
             m.step(epoch)
@@ -67,13 +67,14 @@ class STEActivation(torch.nn.Module):
     monitor_epoch: In this epoch, keep track of the maximal activation value (absolute value).
         Then (at epoch >= quant_start_epoch), clamp the values to [-max, max], and then do quantization.
         If monitor_epoch is None, max=1 is used."""
-    def __init__(self, num_levels=2**8-1, quant_start_epoch=0):
-        super(STEActivation, self).__init__()
-        assert(num_levels >= 2)
-        self.num_levels = num_levels
-        self.abs_max_value = torch.nn.Parameter(torch.Tensor([1.5]), requires_grad=False)
 
-        assert(quant_start_epoch >= 0)
+    def __init__(self, num_levels = 2**8 - 1, quant_start_epoch = 0):
+        super(STEActivation, self).__init__()
+        assert (num_levels >= 2)
+        self.num_levels = num_levels
+        self.abs_max_value = torch.nn.Parameter(torch.Tensor([1.5]), requires_grad = False)
+
+        assert (quant_start_epoch >= 0)
         self.quant_start_epoch = quant_start_epoch
         self.started = self.quant_start_epoch == 0
 
@@ -120,4 +121,3 @@ class STEActivation(torch.nn.Module):
 #     y = STEActivation(num_levels=2)(x)
 #     L = y.norm(2)  # pull to 0
 #     L.backward()
-

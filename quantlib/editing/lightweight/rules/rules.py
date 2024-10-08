@@ -1,23 +1,23 @@
-# 
+#
 # rules.py
-# 
+#
 # Author(s):
 # Matteo Spallanzani <spmatteo@iis.ee.ethz.ch>
-# 
+#
 # Copyright (c) 2020-2021 ETH Zurich.
-# 
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
-# 
+#
 # http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# 
+#
 
 from collections import namedtuple
 import torch
@@ -27,7 +27,6 @@ from ..graph import LightweightGraph
 from .filters import Filter
 from typing import List, Callable
 
-
 Application = namedtuple('Application', ['path', 'old_module', 'new_module'])
 
 
@@ -35,7 +34,7 @@ class LightweightRule(object):
 
     def __init__(self, filter_: Filter, replacement_fun: Callable[[torch.nn.Module], torch.nn.Module]):
 
-        self._filter          = filter_
+        self._filter = filter_
         self._replacement_fun = replacement_fun
 
     @property
@@ -90,7 +89,7 @@ class LightweightRule(object):
 
             self.replace_module(graph.net, lwn.path, new_module)
 
-            applications.append(Application(path=lwn.path, old_module=old_module, new_module=new_module))
+            applications.append(Application(path = lwn.path, old_module = old_module, new_module = new_module))
 
         graph.rebuild_nodes_list()
 
@@ -102,4 +101,3 @@ class LightweightRule(object):
             self.replace_module(graph.net, a.path, a.old_module)
 
         graph.rebuild_nodes_list()
-

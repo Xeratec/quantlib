@@ -28,54 +28,23 @@ from quantlib.algorithms.generic.generic_ops import *
 
 #PACT operations which should not be traced through
 
-PACT_OPS = set([_PACTActivation,
-                PACTUnsignedAct,
-                PACTAsymmetricAct,
-                PACTConv2d,
-                PACTConv1d,
-                PACTConstWrap,
-                PACTLinear,
-                PACTSoftmax,
-                PACTITAMax,
-                PACTIntegerITAMax,
-                PACTITAPartialMax,
-                PACTIntegerITAPartialMax,
-                PACTGELU,
-                PACTLayerNorm,
-                PACTRMSNorm,
-                PACTIntegerSoftmax,
-                PACTIntegerGELU,
-                PACTIntegerLayerNorm,
-                PACTIntegerRMSNorm,
-                PACTEmbedding,
-                PACTWrapModule,
-                PACTHardsigmoid,
-                PACTHardswish,
-                PACTIntegerHardsigmoid,
-                PACTIntegerHardswish,
-                RequantShift,
-                PACTDiv,
-                PACTMean,
-                PACTIntegerMean,
-                PACTIntegerDiv,
-                PACTExp,
-                PACTIntegerExp,
-                Multiply,
-                ChannelwiseThreshold])
+PACT_OPS = set([
+    _PACTActivation, PACTUnsignedAct, PACTAsymmetricAct, PACTConv2d, PACTConv1d, PACTConstWrap, PACTLinear, PACTSoftmax,
+    PACTITAMax, PACTIntegerITAMax, PACTITAPartialMax, PACTIntegerITAPartialMax, PACTGELU, PACTLayerNorm, PACTRMSNorm,
+    PACTIntegerSoftmax, PACTIntegerGELU, PACTIntegerLayerNorm, PACTIntegerRMSNorm, PACTEmbedding, PACTWrapModule,
+    PACTHardsigmoid, PACTHardswish, PACTIntegerHardsigmoid, PACTIntegerHardswish, RequantShift, PACTDiv, PACTMean,
+    PACTIntegerMean, PACTIntegerDiv, PACTExp, PACTIntegerExp, Multiply, ChannelwiseThreshold
+])
 
 #TODO is this still reasonable??
-PACT_OPS_INT = set([PACTIntegerAdd,
-                    PACTIntegerAddMask,
-                    PACTIntegerConcat,
-                    PACTIntegerMatmul,
-                    PACTIntegerEmbedding])
+PACT_OPS_INT = set([PACTIntegerAdd, PACTIntegerAddMask, PACTIntegerConcat, PACTIntegerMatmul, PACTIntegerEmbedding])
 
 #All PACT operations - ordinarily we would want to trace through the
 #integerized operations
 PACT_OPS_INCLUSIVE = PACT_OPS | PACT_OPS_INT
 
-PACTTracer = LeafTracer(leaf_types=list(PACT_OPS))
-PACTInclusiveTracer = LeafTracer(leaf_types=list(PACT_OPS_INCLUSIVE))
+PACTTracer = LeafTracer(leaf_types = list(PACT_OPS))
+PACTInclusiveTracer = LeafTracer(leaf_types = list(PACT_OPS_INCLUSIVE))
 
-PACT_symbolic_trace = partial(custom_symbolic_trace, tracer=PACTTracer)
-PACT_symbolic_trace_inclusive = partial(custom_symbolic_trace, tracer=PACTInclusiveTracer)
+PACT_symbolic_trace = partial(custom_symbolic_trace, tracer = PACTTracer)
+PACT_symbolic_trace_inclusive = partial(custom_symbolic_trace, tracer = PACTInclusiveTracer)

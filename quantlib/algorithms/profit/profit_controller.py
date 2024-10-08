@@ -1,9 +1,6 @@
 import torch
-from torch import nn
 
-from typing import Optional
 
-from copy import deepcopy
 
 from parse import parse
 
@@ -11,9 +8,7 @@ from functools import partial
 
 import numpy as np
 
-from quantlib.editing.lightweight import LightweightNode, LightweightGraph
-from quantlib.editing.fx.passes.pact import PACTInclusiveTracer
-from quantlib.editing.fx.passes import FindSequentialPatternsPass
+from quantlib.editing.lightweight import LightweightGraph
 from quantlib.algorithms import Controller
 from quantlib.algorithms.pact import PACTConv1d, PACTConv2d
 from quantlib.editing.lightweight.rules.filters import SubTypeFilter
@@ -21,7 +16,7 @@ from quantlib.editing.lightweight.rules.filters import SubTypeFilter
 
 class PROFITController(Controller):
     #def __init__(self, modules : list, schedule : dict, net_trace : callable = PACTInclusiveTracer, pattern_trace : callable = PACTInclusiveTracer, patterns : Optional[list] = None, verbose : bool = False):
-    def __init__(self, nodes : list, schedule : dict, verbose : bool = False):
+    def __init__(self, nodes: list, schedule: dict, verbose: bool = False):
         self.nodes = nodes
         self.schedule = {int(k): v for k, v in schedule.items()}
         #self.trace = trace
@@ -33,8 +28,15 @@ class PROFITController(Controller):
         #     self.patterns = patterns
         self.verbose = verbose
         self.sampling = False
-        self.stats = {v.name:{'mean':torch.zeros([v.module.out_channels,]), 'std':torch.ones([v.module.out_channels])} for v in self.nodes}
-        self.metric_map = {k:0. for k in self.stats.keys()}
+        self.stats = {
+            v.name: {
+                'mean': torch.zeros([
+                    v.module.out_channels,
+                ]),
+                'std': torch.ones([v.module.out_channels])
+            } for v in self.nodes
+        }
+        self.metric_map = {k: 0. for k in self.stats.keys()}
         self.hooks = []
 
     @staticmethod
@@ -46,7 +48,6 @@ class PROFITController(Controller):
         # we need names attached to the modules so we can store the statistics
         # in a serializable dict
         return conv_nodes
-
 
     def sample_hook(self, module, input, output, module_name):
         old_mean = self.stats[module_name]['mean']
@@ -81,7 +82,8 @@ class PROFITController(Controller):
                 if cmd == "start_sample":
                     self.sampling = True
                     for n in self.nodes:
-                        self.hooks.append(n.module.register_forward_hook(partial(self.sample_hook, module_name=n.name)))
+                        self.hooks.append(
+                            n.module.register_forward_hook(partial(self.sample_hook, module_name = n.name)))
                 elif cmd == "stop_sample":
                     for h in self.hooks:
                         h.remove()
@@ -91,13 +93,15 @@ class PROFITController(Controller):
                     res = parse("freeze {}", cmd)
                     frac = float(res.fixed[0])
                     assert frac <= 1. and frac >= 0., f"PROFITController, epoch {epoch}: Invalid freeze fraction {frac}!"
-                    mm_keys_sorted = sorted(list(self.metric_map.keys()), key=lambda k:self.metric_map[k], reverse=True)
+                    mm_keys_sorted = sorted(list(self.metric_map.keys()),
+                                            key = lambda k: self.metric_map[k],
+                                            reverse = True)
                     n_modules = len(mm_keys_sorted)
-                    n_to_freeze = int(np.ceil(n_modules*frac))
+                    n_to_freeze = int(np.ceil(n_modules * frac))
                     for n in self.nodes[:n_to_freeze]:
                         n.module.freeze_params()
                     # unfreeze modules which should not be frozen - this allows
-                    # to have non-monotonically increasing fractions 
+                    # to have non-monotonically increasing fractions
                     for n in self.nodes[n_to_freeze:]:
                         n.module.unfreeze_params()
 
@@ -110,17 +114,14 @@ class PROFITController(Controller):
     def step_pre_validation_epoch(self, epoch, *args, **kwargs):
         pass
 
-    def log(self, msg : str):
+    def log(self, msg: str):
         if self.verbose:
             print("[PROFITController]   ", msg)
 
-
-
-
     def state_dict(self):
-        return {'verbose' : self.verbose, 'sampling' : self.sampling, 'stats' : self.stats, 'metric_map': self.metric_map}
+        return {'verbose': self.verbose, 'sampling': self.sampling, 'stats': self.stats, 'metric_map': self.metric_map}
 
-    def load_state_dict(self, state_dict : dict):
+    def load_state_dict(self, state_dict: dict):
         self.verbose = state_dict['verbose']
         self.sampling = state_dict['sampling']
         self.stats = state_dict['stats']
