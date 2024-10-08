@@ -299,6 +299,9 @@ class ReplaceMatchWithModulePass(FxPass):
         #the input to the match
         out_node.replace_all_uses_with(new_node)
 
+        new_node.meta['original_input_node'] = first_matched_node.name
+        new_node.meta['original_output_node'] = out_node.name
+
         for n in reversed(matched_nodes):
             gm.graph.erase_node(n)
             if n.op == 'call_module':
