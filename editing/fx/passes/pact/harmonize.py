@@ -175,7 +175,7 @@ class TruedivReplacementPass(ModularizePass):
 
     @staticmethod
     def truediv_replacement_fn(node, Delta):
-        return (PACTDiv(Delta, stable=False), node.args, node.kwargs)
+        return (PACTDiv(Delta, stable=False, autoscale=False), node.args, node.kwargs)
 
     def __init__(self, Delta=2**8, **kwargs):
         self.kwargs = kwargs
@@ -370,7 +370,7 @@ class InsertActivationsAfterLinearsPass(SequentialPass):
 
         idx = 0
         for node in node_list:
-            new_module = self.inserted_module(node)
+            new_module = self.inserted_module(node, **self.kwargs)
             if new_module is not None:
                 passes.append(InsertModuleAfterNodePass(node, new_module, f"{self.name.upper()}_{idx}"))
                 idx += 1
@@ -533,6 +533,10 @@ def rqs_merge_fun(gm : fx.GraphModule, match : Match):
         add1 = rqs_1.add
         add2 = rqs_2.add
         newAdd = ((add1 * rqs_2.mul + add2 * rqs_1.div)/min(rqs_1.div, rqs_2.div)).round()
+    
+    if newMul == 0:
+        print("JUNGVI: WARNING: Mul factor of RSQ has been rounded to zero. Now setting it to 1.")
+        newMul = torch.tensor([1.])
 
     return RequantShift(newMul, newAdd, (rqs_2.n_levels_out)//(2**mixed), signed = signed, D=newD, cmsis_requant=rqs_1.cmsis_requant, requant_node=rqs_1.requant_node)
 
